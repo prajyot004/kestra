@@ -20,7 +20,7 @@
     import TimerCogOutline from "vue-material-design-icons/TimerCogOutline.vue";
     import ChartBoxOutline from "vue-material-design-icons/ChartBoxOutline.vue";
     import Connection from "vue-material-design-icons/Connection.vue";
-    import VectorIntersection from "vue-material-design-icons/VectorIntersection.vue";
+    import DotsSquare from "vue-material-design-icons/DotsSquare.vue";
     import AccountOutline from "vue-material-design-icons/AccountOutline.vue";
     import ShieldCheckOutline from "vue-material-design-icons/ShieldCheckOutline.vue";
     import ServerOutline from "vue-material-design-icons/ServerOutline.vue";
@@ -34,7 +34,7 @@
     const store = useStore()
 
     function routeStartWith(route) {
-        return $router.getRoutes().filter(r => r.name.startsWith(route)).map(r => r.name);
+        return $router?.getRoutes().filter(r => r.name.startsWith(route)).map(r => r.name);
     }
 
     const configs = computed(() => store.state.misc.configs);
@@ -105,7 +105,7 @@
                 routes: routeStartWith("namespaces"),
                 title: t("namespaces"),
                 icon: {
-                    element: shallowRef(VectorIntersection),
+                    element: shallowRef(DotsSquare),
                     class: "menu-icon"
                 }
             },
