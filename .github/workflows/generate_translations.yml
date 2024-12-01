@@ -22,8 +22,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 10
-          ref: ${{ github.head_ref }}
+          fetch-depth: 50
+          ref: ${{ github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
