@@ -936,7 +936,7 @@
       },
       "recent": {
         "label": "Recherches récentes",
-        "empty": "Vous n'avez pas encore effectué de recherche."
+        "empty": "Vous n'avez encore rien recherché."
       },
       "labels": {
         "placeholder": "Tapez le label comme 'key:value'"
@@ -949,7 +949,8 @@
           "placeholder": "Étiquette"
         },
         "label": "Recherches enregistrées",
-        "tooltip": "Vous ne pouvez pas enregistrer des critères de recherche vides."
+        "tooltip": "Vous ne pouvez pas enregistrer des critères de recherche vides.",
+        "empty": "Vous n'avez pas encore enregistré de recherche."
       },
       "options": {
         "namespace": "Namespace",
@@ -960,13 +961,22 @@
         "child": "Enfant",
         "absolute_date": "Date absolue",
         "relative_date": "Date relative",
-        "level": "Niveau de log"
+        "level": "Niveau de log",
+        "task": "Tâche",
+        "aggregation": "Agrégation",
+        "metric": "Métrique",
+        "trigger_state": "État",
+        "action": "Action",
+        "permission": "Permission",
+        "user": "Utilisateur",
+        "details": "Détails"
       },
       "empty": "Aucune donnée.",
       "label": "Choisir des filtres",
       "settings": {
         "show_chart": "Afficher le graphique principal"
-      }
+      },
+      "key_value_type": "Tapez le paramètre comme 'key:value'"
     },
     "force run title": "Forcer l'exécution de l'exécution <code>{id}</code>.",
     "executions force run": "<code>{executionCount}</code> exécution(s) forcée(s) en cours d'exécution",
@@ -1006,6 +1016,26 @@
     "create_custom_dashboard": "Créer un nouveau tableau de bord",
     "edit_custom_dashboard": "Modifier le tableau de bord",
     "custom_dashboard_empty": "Il n'y a aucun résultat à afficher.",
-    "remove_bookmark": "Êtes-vous sûr de vouloir supprimer ce signet ?"
+    "remove_bookmark": "Êtes-vous sûr de vouloir supprimer ce signet ?",
+    "execution_guide": {
+      "get_started": {
+        "title": "Commencer ⚡",
+        "text": "Suivez le Guide de démarrage rapide pour installer Kestra et commencer à créer vos premiers workflows."
+      },
+      "workflow_components": {
+        "text": "Découvrez les principaux composants d'orchestration d'un workflow Kestra.",
+        "title": "Composants du Workflow"
+      },
+      "videos_tutorials": {
+        "text": "Commencez avec nos tutoriels vidéo.",
+        "title": "Tutoriels Vidéo"
+      }
+    },
+    "no-executions-view": {
+      "sub_title": "Cliquez sur le bouton Exécuter pour démarrer l'exécution de votre premier workflow.",
+      "guidance_desc": "Besoin d'aide pour exécuter votre flow ?",
+      "guidance_sub_desc": "Suivez la documentation pour toutes les informations dont vous avez besoin.",
+      "title": "Commencez à automatiser avec"
+    }
   }
 }

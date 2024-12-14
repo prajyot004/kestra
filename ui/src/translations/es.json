@@ -949,7 +949,8 @@
           "placeholder": "Etiqueta"
         },
         "label": "Búsquedas guardadas",
-        "tooltip": "No puedes guardar criterios de búsqueda vacíos."
+        "tooltip": "No puedes guardar criterios de búsqueda vacíos.",
+        "empty": "Todavía no has guardado ninguna búsqueda."
       },
       "options": {
         "namespace": "Namespace",
@@ -960,13 +961,22 @@
         "child": "Niño",
         "absolute_date": "Fecha absoluta",
         "relative_date": "Fecha relativa",
-        "level": "Nivel de log"
+        "level": "Nivel de log",
+        "task": "Tarea",
+        "aggregation": "Agregación",
+        "metric": "Métrica",
+        "trigger_state": "Estado",
+        "action": "Acción",
+        "permission": "Permiso",
+        "user": "Usuario",
+        "details": "Detalles"
       },
       "empty": "Sin datos.",
       "label": "Elegir filtros",
       "settings": {
         "show_chart": "Mostrar gráfico principal"
-      }
+      },
+      "key_value_type": "Escriba el parámetro como 'key:value'"
     },
     "force run title": "Forzar la ejecución de <code>{id}</code>.",
     "executions force run": "<code>{executionCount}</code> ejecución(es) forzada(s) en ejecución",
@@ -1006,6 +1016,26 @@
     "create_custom_dashboard": "Crear nuevo dashboard",
     "edit_custom_dashboard": "Editar Panel de Control",
     "custom_dashboard_empty": "No hay resultados para mostrar.",
-    "remove_bookmark": "¿Está seguro de que desea eliminar este marcador?"
+    "remove_bookmark": "¿Está seguro de que desea eliminar este marcador?",
+    "execution_guide": {
+      "get_started": {
+        "title": "Comenzar ⚡",
+        "text": "Sigue la Guía de inicio rápido para instalar Kestra y comenzar a crear tus primeros flujos de trabajo."
+      },
+      "workflow_components": {
+        "text": "Conozca los principales componentes de orquestación de un flujo de trabajo de Kestra.",
+        "title": "Componentes del Workflow"
+      },
+      "videos_tutorials": {
+        "text": "Comienza con nuestros tutoriales en video.",
+        "title": "Tutoriales en Video"
+      }
+    },
+    "no-executions-view": {
+      "sub_title": "Haz clic en el botón Ejecutar para iniciar la ejecución de tu primer flujo de trabajo.",
+      "guidance_desc": "¿Necesitas orientación para ejecutar tu flow?",
+      "guidance_sub_desc": "Sigue la documentación para toda la información que necesitas.",
+      "title": "Comienza a automatizar con"
+    }
   }
 }

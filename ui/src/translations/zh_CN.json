@@ -935,7 +935,7 @@
         "contains": "包含"
       },
       "recent": {
-        "label": "最近的搜索",
+        "label": "最近搜索",
         "empty": "您还没有搜索任何内容。"
       },
       "labels": {
@@ -949,7 +949,8 @@
           "placeholder": "标签"
         },
         "label": "保存的搜索",
-        "tooltip": "您不能保存空的搜索条件。"
+        "tooltip": "您不能保存空的搜索条件。",
+        "empty": "您还没有保存任何搜索。"
       },
       "options": {
         "namespace": "命名空间",
@@ -960,13 +961,22 @@
         "child": "子项",
         "absolute_date": "绝对日期",
         "relative_date": "相对日期",
-        "level": "Log级别"
+        "level": "Log级别",
+        "task": "任务",
+        "aggregation": "聚合",
+        "metric": "指标",
+        "trigger_state": "状态",
+        "action": "操作",
+        "permission": "权限",
+        "user": "用户",
+        "details": "详情"
       },
       "empty": "无数据。",
       "label": "选择过滤器",
       "settings": {
         "show_chart": "显示主图表"
-      }
+      },
+      "key_value_type": "将参数输入为 'key:value'"
     },
     "force run title": "强制运行执行 <code>{id}</code>。",
     "executions force run": "<code>{executionCount}</code> 次执行被强制运行",
@@ -1006,6 +1016,26 @@
     "create_custom_dashboard": "创建新仪表板",
     "edit_custom_dashboard": "编辑仪表板",
     "custom_dashboard_empty": "没有结果显示。",
-    "remove_bookmark": "您确定要删除此书签吗？"
+    "remove_bookmark": "您确定要删除此书签吗？",
+    "execution_guide": {
+      "get_started": {
+        "title": "开始使用 ⚡",
+        "text": "请按照快速入门指南安装Kestra并开始构建您的第一个工作流。"
+      },
+      "workflow_components": {
+        "text": "了解 Kestra 工作流的主要编排组件。",
+        "title": "工作流组件"
+      },
+      "videos_tutorials": {
+        "text": "开始观看我们的视频教程。",
+        "title": "视频教程"
+      }
+    },
+    "no-executions-view": {
+      "sub_title": "单击Execute按钮以开始您的第一个工作流执行。",
+      "guidance_desc": "需要指导来执行您的flow吗？",
+      "guidance_sub_desc": "请查阅文档以获取您所需的所有信息。",
+      "title": "开始自动化使用"
+    }
   }
 }
