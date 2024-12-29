@@ -79,12 +79,16 @@
                     :key="filter.value"
                     :value="filter"
                     :label="filter.label"
+                    :disabled="isOptionDisabled(filter)"
                     :class="{
                         selected: current.some((c) =>
                             c.value.includes(filter.value),
                         ),
+                        disabled: isOptionDisabled(filter),
                     }"
-                    @click="() => valueCallback(filter)"
+                    @click="
+                        () => !isOptionDisabled(filter) && valueCallback(filter)
+                    "
                 />
             </template>
         </el-select>
@@ -298,7 +302,21 @@
             updateHoveringIndex(index);
         }
     };
+    const isOptionDisabled = (filter) => {
+        const currentFilter = current.value[dropdowns.value.third.index];
+        if (!currentFilter) return false;
+
+        // Check if this filter value is already selected in any current filter
+        return current.value.some(
+            (item) =>
+                item.label === currentFilter.label &&
+                item.value.includes(filter.value),
+        );
+    };
     const valueCallback = (filter, isDate = false) => {
+        // Don't do anything if the option is disabled
+        if (isOptionDisabled(filter)) return;
+
         if (!isDate) {
             const values = current.value[dropdowns.value.third.index].value;
             const index = values.indexOf(filter.value);
@@ -489,7 +507,8 @@
     };
 
     // Include parameters from URL directly to filter
-    if (props.decode) current.value = decodeParams(route.query, props.include, OPTIONS);
+    if (props.decode)
+        current.value = decodeParams(route.query, props.include, OPTIONS);
 
     const addNamespaceFilter = (namespace) => {
         if (!props.decode || !namespace) return;
@@ -612,6 +631,17 @@ $dashboards: 52px;
 
     & .el-select-dropdown__item .material-design-icon {
         bottom: -0.15rem;
+    }
+
+    .el-select-dropdown__item {
+        &.disabled {
+            opacity: 0.6;
+
+            &:hover {
+                cursor: not-allowed;
+                background-color: transparent;
+            }
+        }
     }
 }
 </style>

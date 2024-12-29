@@ -247,7 +247,6 @@
 
                         <el-table-column
                             prop="flowRevision"
-                            v-if="displayColumn('flowRevision')"
                             :label="$t('revision')"
                             class-name="shrink"
                         >
