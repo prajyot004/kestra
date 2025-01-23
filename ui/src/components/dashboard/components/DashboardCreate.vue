@@ -1,7 +1,7 @@
 <template>
     <top-nav-bar :title="routeInfo.title" />
     <section class="full-container">
-        <dashboard-editor allow-save-unchanged @save="save" :initial-source="initialSource" />
+        <dashboard-editor v-if="initialSource" allow-save-unchanged @save="save" :initial-source="initialSource" />
     </section>
 </template>
 
@@ -18,7 +18,15 @@
         },
         data() {
             return {
-                initialSource: `title: Overview
+                initialSource: undefined
+            }
+        },
+        async beforeMount() {
+            const blueprintId = this.$route.query.blueprintId;
+            if (blueprintId !== undefined) {
+                this.initialSource = await this.$store.dispatch("blueprints/getBlueprintSource", {type: "community", kind: "dashboard", id: blueprintId});
+            } else {
+                this.initialSource = `title: Overview
 description: Default overview dashboard
 timeWindow:
   default: P30D # P30DT30H
@@ -139,7 +147,7 @@ charts:
         total:
           displayName: Total Executions
           agg: COUNT
-          graphStyle: BARS`
+          graphStyle: BARS`;
             }
         },
         methods: {

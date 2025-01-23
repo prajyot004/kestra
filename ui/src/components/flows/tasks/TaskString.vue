@@ -8,23 +8,20 @@
         />
     </template>
     <template v-else>
-        <editor
+        <InputText
             :model-value="editorValue"
-            :navbar="false"
-            :full-height="false"
-            :input="true"
-            lang="plaintext"
             @update:model-value="onInput"
+            class="w-100"
         />
     </template>
 </template>
 <script>
     import Task from "./Task";
-    import Editor from "../../../components/inputs/Editor.vue";
+    import InputText from "../../../components/code/components/inputs/InputText.vue";
 
     export default {
         mixins: [Task],
-        components: {Editor},
+        components: {InputText},
         emits: ["update:modelValue"],
         computed: {
             isValid() {
@@ -42,25 +39,37 @@
                 if (typeof this.values === "string") {
                     const duration = this.$moment.duration(this.values);
 
-                    return new Date(1981, 1, 1, duration.hours(), duration.minutes(), duration.seconds())
+                    return new Date(
+                        1981,
+                        1,
+                        1,
+                        duration.hours(),
+                        duration.minutes(),
+                        duration.seconds(),
+                    );
                 }
 
                 return undefined;
             },
             defaultDuration() {
                 return this.$moment().seconds(0).minutes(0).hours(0).toDate();
-            }
+            },
         },
         methods: {
             onInputDuration(value) {
-                const emitted = value === "" || value === null ? undefined : this.$moment.duration({
-                    seconds: value.getSeconds(),
-                    minutes: value.getMinutes(),
-                    hours: value.getHours(),
-                }).toString();
+                const emitted =
+                    value === "" || value === null
+                        ? undefined
+                        : this.$moment
+                            .duration({
+                                seconds: value.getSeconds(),
+                                minutes: value.getMinutes(),
+                                hours: value.getHours(),
+                            })
+                            .toString();
 
                 this.$emit("update:modelValue", emitted);
-            }
-        }
+            },
+        },
     };
 </script>

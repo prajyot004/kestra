@@ -103,13 +103,23 @@ export function useLeftMenu() {
                 }
             },
             {
-                href: {name: "blueprints"},
+                href: {name: "blueprints", params: {kind: "flow"}},
                 routes: routeStartWith("blueprints"),
                 title: t("blueprints.title"),
                 icon: {
                     element: shallowRef(BallotOutline),
                     class: "menu-icon"
                 },
+                child: [
+                    {
+                        title: t("homeDashboard.title"),
+                        icon: {
+                            element: shallowRef(ViewDashboardVariantOutline),
+                            class: "menu-icon"
+                        },
+                        href: {name: "blueprints", params: {kind: "dashboard"}},
+                    },
+                ]
             },
             {
                 href: {name: "plugins/list"},

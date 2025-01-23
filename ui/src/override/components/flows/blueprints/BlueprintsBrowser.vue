@@ -48,7 +48,7 @@
                     <component
                         class="blueprint-link"
                         :is="embed ? 'div' : 'router-link'"
-                        :to="embed ? undefined : {name: 'blueprints/view', params: {blueprintId: blueprint.id, tab}}"
+                        :to="embed ? undefined : {name: 'blueprints/view', params: {blueprintId: blueprint.id, tab, kind: blueprintKind}}"
                     >
                         <div class="left">
                             <div class="blueprint">
@@ -57,7 +57,7 @@
                                 </div>
                                 <div v-if="!system" class="tags text-uppercase">
                                     <div v-for="(tag, index) in blueprint.tags" :key="index" class="tag-box">
-                                        <el-tag type="info" size="small">
+                                        <el-tag size="small">
                                             {{ tag }}
                                         </el-tag>
                                     </div>
@@ -85,7 +85,7 @@
                                     {{ $t('copy') }}
                                 </el-button>
                             </el-tooltip>
-                            <el-button v-else text bg size="default" @click.prevent.stop="blueprintToEditor(blueprint.id)">
+                            <el-button v-else type="primary" size="default" @click.prevent.stop="blueprintToEditor(blueprint.id)">
                                 {{ $t('use') }}
                             </el-button>
                         </div>
@@ -99,7 +99,7 @@
 
 <script>
     import DataTable from "../../../../components/layout/DataTable.vue";
-    import TaskIcon from "@kestra-io/ui-libs/src/components/misc/TaskIcon.vue";
+    import {TaskIcon} from "@kestra-io/ui-libs";
     import DataTableActions from "../../../../mixins/dataTableActions";
     import {shallowRef} from "vue";
     import ContentCopy from "vue-material-design-icons/ContentCopy.vue";
@@ -125,6 +125,10 @@
             tab: {
                 type: String,
                 default: undefined,
+            },
+            blueprintKind: {
+                type: String,
+                default: "flow",
             },
             embed: {
                 type: Boolean,
@@ -156,19 +160,22 @@
             initSelectedTag() {
                 return this.$route?.query?.selectedTag ?? 0
             },
-            async copy(blueprintId) {
+            async copy(id) {
                 await Utils.copy(
-                    (await this.$http.get(`${this.embedFriendlyBlueprintBaseUri}/${blueprintId}/flow`)).data
+                    (await this.$store.dispatch("blueprints/getBlueprintSource", {type: this.blueprintType, kind: this.blueprintKind, id: id}))
                 );
             },
             async blueprintToEditor(blueprintId) {
                 localStorage.setItem(editorViewTypes.STORAGE_KEY, editorViewTypes.SOURCE_TOPOLOGY);
+                const query = this.blueprintKind === "flow" ?
+                    {blueprintId: blueprintId, blueprintSource: this.embedFriendlyBlueprintBaseUri.includes("community") ? "community" : "custom"} :
+                    {blueprintId: blueprintId};
                 this.$router.push({
-                    name: "flows/create",
+                    name: `${this.blueprintKind}s/create`,
                     params: {
                         tenant: this.$route.params.tenant
                     },
-                    query: {blueprintId: blueprintId, blueprintSource: this.embedFriendlyBlueprintBaseUri.includes("community") ? "community" : "custom"}
+                    query: query
                 });
             },
             goToDetail(blueprintId) {
@@ -181,17 +188,13 @@
                 if (this.$route.query.q || this.q) {
                     query.q = this.$route.query.q || this.q;
                 }
-
-                return this.$http
-                    .get(beforeLoadBlueprintBaseUri + "/tags", {
-                        params: query
-                    })
-                    .then(response => {
+                return this.$store.dispatch("blueprints/getBlueprintTagsForQuery", {type: this.blueprintType, kind: this.blueprintKind, ...query})
+                    .then(data => {
                         // Handle switch tab while fetching data
                         if (this.embedFriendlyBlueprintBaseUri === beforeLoadBlueprintBaseUri) {
-                            this.tags = this.tagsResponseMapper(response.data);
+                            this.tags = this.tagsResponseMapper(data);
                         }
-                    })
+                    });
             },
             loadBlueprints(beforeLoadBlueprintBaseUri) {
                 const query = {}
@@ -199,7 +202,6 @@
                 if (this.$route.query.page || this.internalPageNumber) {
                     query.page = parseInt(this.$route.query.page || this.internalPageNumber);
                 }
-
 
                 if (this.$route.query.size || this.internalPageSize) {
                     query.size = parseInt(this.$route.query.size || this.internalPageSize);
@@ -215,16 +217,13 @@
                     query.tags = this.$route.query.selectedTag || this.selectedTag;
                 }
 
-                return this.$http
-                    .get(beforeLoadBlueprintBaseUri, {
-                        params: query
-                    })
-                    .then(response => {
+                return this.$store
+                    .dispatch("blueprints/getBlueprintsForQuery", {type: this.blueprintType, kind: this.blueprintKind, params: query})
+                    .then(data => {
                         // Handle switch tab while fetching data
                         if (this.embedFriendlyBlueprintBaseUri === beforeLoadBlueprintBaseUri) {
-                            const blueprintsResponse = response.data;
-                            this.total = blueprintsResponse.total;
-                            this.blueprints = blueprintsResponse.results;
+                            this.total = data.total;
+                            this.blueprints = data.results;
                         }
                     });
             },
@@ -258,6 +257,7 @@
         computed: {
             ...mapState("auth", ["user"]),
             ...mapState("plugin", ["icons"]),
+            ...mapState("blueprint", ["blueprints"]),
             userCanCreateFlow() {
                 return this.user.hasAnyAction(permission.FLOW, action.CREATE);
             },
@@ -268,6 +268,9 @@
                 return base
                     ? (base.endsWith("/undefined") ? base.replace("/undefined", `/${tab}`) : base)
                     : `${apiUrl(this.$store)}/blueprints/${tab}`;
+            },
+            blueprintType() {
+                return this.tab ?? this?.$route?.params?.tab ?? "community";
             }
         },
         watch: {
@@ -308,14 +311,17 @@
                 this.loadData();
             },
             tab() {
-                this.loadData()
+                this.loadData();
+            },
+            blueprintKind() {
+                this.loadData();
             }
         }
     };
 </script>
 <style scoped lang="scss">
     @use 'element-plus/theme-chalk/src/mixins/mixins' as *;
-    @import "@kestra-io/ui-libs/src/scss/variables.scss";
+    @import "@kestra-io/ui-libs/src/scss/variables";
 
     .blueprint {
         display: flex;
@@ -336,22 +342,22 @@
 
         // Two elements => one element on each side
         &:has(> :nth-child(2)) {
-            margin: $spacer 0 calc(0.5 * var(--spacer)) 0;
+            margin: $spacer 0 .5rem 0;
 
             .el-card & {
                 // Enough space not to overlap with switch view when embedded
-                margin-top: calc(1.6 * var(--spacer));
+                margin-top: 1.6rem;
 
 
                 // Embedded tabs looks weird without cancelling the margin (this brings a top-left tabs with bottom-right search)
                 > :nth-child(1) {
-                    margin-top: calc(-1.5 * var(--spacer));
+                    margin-top: -1.5rem;
                 }
             }
 
             > :nth-last-child(1) {
                 margin-left: auto;
-                padding: calc(0.5 * var(--spacer)) 0;
+                padding: .5rem 0;
             }
         }
     }
@@ -368,14 +374,9 @@
 
         .blueprint-card {
             cursor: pointer;
-            margin: 0 0 1px 0;
             border-radius: 0;
             border: 0;
-            border-bottom: 1px solid var(--el-border-color-darker);
-            
-            html.dark &.blueprint-card{
-                border-bottom: solid var(--el-border-color-darker);
-            }
+            border-bottom: 1px solid var(--ks-border-primary);
 
             .blueprint-link {
                 display: flex;
@@ -401,24 +402,19 @@
                     .tags {
                         margin: 10px 0;
                         display: flex;
-                        
 
-                        .el-tag.el-tag--info {
-                            background-color: #FEFEFE;
+
+                        .el-tag {
+                            background-color: var(--ks-tag-background);
                             padding: 15px 10px;
-                            color: var(--el-text-color-regular);
+                            color: var(--ks-tag-content);
                             text-transform: capitalize;
                             font-size: var(--el-font-size-small);
-                            border: 1px solid var(--bs-border-color);
-
-                            html.dark &.el-tag.el-tag--info {
-                                background-color: var(--bs-gray-600);
-                                border-color: var(--bs-gray-600-lighten-15);
-                            }
+                            border: 1px solid var(--ks-border-primary);
                         }
 
                         .tag-box {
-                            margin-right: calc($spacer / 3);
+                            margin-right: .3rem;
                         }
                     }
 
@@ -426,7 +422,7 @@
                     .tasks-container {
                         $plugin-icon-size: calc(var(--font-size-base) + 0.3rem);
                         display: flex;
-                        gap: calc(var(--spacer) / 4);
+                        gap: .25rem;
                         width: fit-content;
                         height: $plugin-icon-size;
 
@@ -440,12 +436,6 @@
                 .side {
                     &.buttons {
                         white-space: nowrap;
-                    }
-
-                    :deep(.el-button.is-text){
-                        background-color:  var(--el-color-primary) !important;
-                        color:  var(--el-color-white);
-
                     }
                 }
             }
@@ -476,7 +466,7 @@
             }
 
             html.dark &.embed {
-                background-color: var(--bs-gray-600);
+                background-color: var(--ks-background-card);
             }
         }
     }
@@ -484,28 +474,23 @@
     .tags-selection {
         display: flex;
         width: 100%;
-        margin-bottom: var(--spacer);
-        gap: calc($spacer / 3);
+        margin-bottom: 1rem;
+        gap: .3rem;
         flex-wrap: wrap;
+        --el-button-bg-color: var(--ks-background-card);
 
         & > * {
             max-width: 50%;
 
             :deep(span) {
                 border-radius: $border-radius !important;
-                border: 1px solid var(--bs-border-color);
-                background: var(--bs-white);
+                border: 1px solid var(--ks-border-primary);
                 width: 100%;
                 font-size: var(--el-font-size-extra-small);
-                font-weight: bold;
                 box-shadow: none;
                 text-overflow: ellipsis;
                 overflow: hidden;
             }
-        }
-
-        html.dark & :deep(:not(.is-active) span) {
-            background: var(--bs-gray-100);
         }
     }
 </style>

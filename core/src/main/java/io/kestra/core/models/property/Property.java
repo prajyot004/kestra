@@ -8,14 +8,10 @@ import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
 import com.fasterxml.jackson.databind.ser.std.StdSerializer;
-import com.google.common.annotations.VisibleForTesting;
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.serializers.JacksonMapper;
-import lombok.AccessLevel;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.NoArgsConstructor;
+import lombok.*;
 
 import java.io.IOException;
 import java.io.Serial;
@@ -41,13 +37,20 @@ public class Property<T> {
         .copy()
         .configure(SerializationFeature.WRITE_DURATIONS_AS_TIMESTAMPS, false);
 
+    @Getter
     private String expression;
     private T value;
 
-    // used only by the deserializer and in tests
-    @VisibleForTesting
     public Property(String expression) {
         this.expression = expression;
+    }
+
+    public Property(Map<?, ?> map) {
+        try {
+            expression = MAPPER.writeValueAsString(map);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException(e);
+        }
     }
 
     /**
@@ -345,9 +348,9 @@ public class Property<T> {
         return Objects.hash(expression);
     }
 
-    // used only by the serializer
-    String getExpression() {
-        return this.expression;
+    // used only by the value extractor
+    T getValue() {
+        return value;
     }
 
     static class PropertyDeserializer extends StdDeserializer<Property<?>> {

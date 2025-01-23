@@ -46,7 +46,7 @@ public class StandAloneCommand extends AbstractServerCommand {
     @CommandLine.Option(names = {"-f", "--flow-path"}, description = "the flow path containing flow to inject at startup (when running with a memory flow repository)")
     private File flowPath;
 
-    @CommandLine.Option(names = {"--worker-thread"}, description = "the number of worker threads, defaults to two times the number of available processors. Set it to 0 to avoid starting a worker.")
+    @CommandLine.Option(names = {"--worker-thread"}, description = "the number of worker threads, defaults to four times the number of available processors. Set it to 0 to avoid starting a worker.")
     private int workerThread = defaultWorkerThread();
 
     @CommandLine.Option(names = {"--skip-executions"}, split=",", description = "a list of execution identifiers to skip, separated by a coma; for troubleshooting purpose only")

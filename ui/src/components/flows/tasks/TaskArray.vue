@@ -1,6 +1,11 @@
 <template>
-    <div class="d-flex w-100 task-array" v-for="(item, index) in values" :key="'array-' + index">
-        <div class="flex-fill flex-grow-1 w-100 me-2">
+    <el-row
+        v-for="(item, index) in values"
+        :key="'array-' + index"
+        :gutter="10"
+        class="w-100"
+    >
+        <el-col :span="22">
             <component
                 :is="`task-${getType(schema.items)}`"
                 :model-value="item"
@@ -8,20 +13,21 @@
                 :root="getKey(index)"
                 :schema="schema.items"
                 :definitions="definitions"
+                :placeholder="$t('value')"
+                class="w-100"
             />
-        </div>
-        <div class="flex-shrink-1">
-            <el-button-group class="d-flex flex-nowrap">
-                <el-button :icon="Plus" @click="addItem" />
-                <el-button :icon="Minus" @click="removeItem(index)" :disabled="index === 0 && values.length === 1" />
-            </el-button-group>
-        </div>
-    </div>
+        </el-col>
+        <el-col :span="2" class="col align-self-center delete">
+            <DeleteOutline @click="removeItem(key)" />
+        </el-col>
+    </el-row>
+    <Add @add="addItem()" v-if="values.at(-1)" />
 </template>
 
 <script setup>
-    import Plus from "vue-material-design-icons/Plus.vue";
-    import Minus from "vue-material-design-icons/Minus.vue";
+    import {DeleteOutline} from "../../code/utils/icons";
+
+    import Add from "../../code/components/Add.vue";
 </script>
 
 <script>
@@ -85,9 +91,7 @@
         },
     };
 </script>
-<style lang="scss" scoped>
-    .task-array {
-        margin-bottom: 2px;
-    }
 
+<style scoped lang="scss">
+@import "../../code/styles/code.scss";
 </style>

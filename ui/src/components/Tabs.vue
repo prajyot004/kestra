@@ -111,7 +111,7 @@
             this.setActiveName();
         },
         methods: {
-            ...mapMutations("editor", ["changeExplorerWidth"]),
+            ...mapMutations("editor", ["changeExplorerWidth", "closeExplorer"]),
             dragSidebar(e){
                 const SELF = this;
 
@@ -170,7 +170,21 @@
                     .filter(tab => (this.embedActiveTab ?? this.$route.params.tab) === tab.name)[0] || this.tabs[0];
             },
             isEditorActiveTab() {
-                return this.activeTab.name === "editor";
+                const TAB = this.activeTab.name;
+                const ROUTE = this.$route.name;
+
+                if (["flows/update", "flows/create"].includes(ROUTE)) {
+                    return TAB === "edit";
+                } else if (
+                    ["namespaces/update", "namespaces/create"].includes(ROUTE)
+                ) {
+                    if (TAB === "files") return true;
+
+                    this.closeExplorer();
+                    return false;
+                }
+
+                return false;
             },
             isNamespaceEditor(){
                 return this.activeTab?.props?.isNamespace === true;
@@ -201,7 +215,7 @@
             }
 
             a {
-                color: var(--el-text-color-disabled);
+                color: var(--ks-content-inactive);
             }
         }
     }
@@ -210,13 +224,13 @@
         flex: 0 0 3px;
         border-radius: 0.15rem;
         margin: 0 4px;
-        background-color: var(--bs-border-color);
+        background-color: var(--ks-border-primary);
         border: none;
         cursor: col-resize;
         user-select: none; /* disable selection */
 
         &:hover {
-            background-color: var(--bs-secondary);
+            background-color: var(--ks-border-active);
         }
     }
 

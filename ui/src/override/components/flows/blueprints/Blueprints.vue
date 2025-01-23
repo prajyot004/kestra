@@ -2,14 +2,21 @@
     <top-nav-bar v-if="!embed" :title="routeInfo.title" />
     <dotted-layout
         :embed="embed"
-        :phrase="$t('blueprints.header.catch phrase.2')"
+        :phrase="$t('blueprints.header.catch phrase.2', {kind: kind})"
         :alt="$t('blueprints.header.alt')"
         :image="headerImage"
         :image-dark="headerImageDark"
     >
         <section class="main-container" v-bind="$attrs">
             <blueprint-detail v-if="selectedBlueprintId" :embed="embed" :blueprint-id="selectedBlueprintId" @back="selectedBlueprintId = undefined" :blueprint-base-uri="blueprintUri" />
-            <blueprints-browser @loaded="$emit('loaded', $event)" :class="{'d-none': !!selectedBlueprintId}" :embed="embed" :blueprint-base-uri="blueprintUri" @go-to-detail="blueprintId => selectedBlueprintId = blueprintId" />
+            <blueprints-browser
+                @loaded="$emit('loaded', $event)"
+                :class="{'d-none': !!selectedBlueprintId}"
+                :embed="embed"
+                :blueprint-base-uri="blueprintUri"
+                :blueprint-kind="kind"
+                @go-to-detail="blueprintId => selectedBlueprintId = blueprintId"
+            />
         </section>
     </dotted-layout>
 </template>
@@ -36,6 +43,12 @@
         emits: [
             "loaded"
         ],
+        props: {
+            kind: {
+                type: String,
+                required: true
+            },
+        },
         data() {
             return {
                 selectedBlueprintId: undefined,

@@ -1,51 +1,65 @@
 <template>
-    <template v-if="properties">
-        <el-form-item
-            :key="index"
-            :required="isRequired(key)"
-            v-for="(schema, key, index) in properties"
-        >
-            <template #label>
-                <span class="d-flex flex-grow-1">
-                    <span class="me-auto">
-                        <code>{{ getKey(key) }}</code>&nbsp;
-                        <el-tooltip v-if="hasTooltip(schema)" :persistent="false" transition="" :hide-after="0" effect="light">
-                            <template #content>
-                                <markdown class="markdown-tooltip" :source="helpText(schema)" />
-                            </template>
-                            <help />
-                        </el-tooltip>
-                    </span>
-                    <span>
-                        <el-tag disable-transitions type="info" size="small">
-                            {{ getType(schema) }}
-                        </el-tag>
-                    </span>
-                </span>
-            </template>
-            <component
-                :is="`task-${getType(schema, key)}`"
-                :model-value="getPropertiesValue(key)"
-                :task="modelValue"
-                @update:model-value="onObjectInput(key, $event)"
-                :root="getKey(key)"
-                :schema="schema"
+    <el-form label-position="top">
+        <template v-if="properties">
+            <el-form-item
+                :key="index"
                 :required="isRequired(key)"
+                v-for="(schema, key, index) in properties"
+            >
+                <template #label>
+                    <span v-if="required" class="me-1 text-danger">*</span>
+                    <span v-if="getKey(key)" class="label">
+                        {{ getKey(key) }}
+                    </span>
+                    <el-tag
+                        disable-transitions
+                        size="small"
+                        class="ms-2 type-tag"
+                    >
+                        {{ getType(schema) }}
+                    </el-tag>
+                    <el-tooltip
+                        v-if="hasTooltip(schema)"
+                        :persistent="false"
+                        :hide-after="0"
+                        effect="light"
+                    >
+                        <template #content>
+                            <markdown
+                                class="markdown-tooltip"
+                                :source="helpText(schema)"
+                            />
+                        </template>
+                        <help class="ms-2" />
+                    </el-tooltip>
+                </template>
+                <component
+                    :is="`task-${getType(schema, key)}`"
+                    :model-value="getPropertiesValue(key)"
+                    :task="modelValue"
+                    @update:model-value="onObjectInput(key, $event)"
+                    :root="getKey(key)"
+                    :schema="schema"
+                    :required="isRequired(key)"
+                    :definitions="definitions"
+                    class="mt-1 mb-2 wrapper"
+                />
+            </el-form-item>
+        </template>
+        <template v-else>
+            <task-dict
+                :model-value="modelValue"
+                :task="task"
+                @update:model-value="
+                    (value) => $emit('update:modelValue', value)
+                "
+                :root="root"
+                :schema="schema"
+                :required="required"
                 :definitions="definitions"
             />
-        </el-form-item>
-    </template>
-    <template v-else>
-        <task-dict
-            :model-value="modelValue"
-            :task="task"
-            @update:model-value="value => $emit('update:modelValue', value)"
-            :root="root"
-            :schema="schema"
-            :required="required"
-            :definitions="definitions"
-        />
-    </template>
+        </template>
+    </el-form>
 </template>
 
 <script>
@@ -72,12 +86,12 @@
         computed: {
             properties() {
                 if (this.schema) {
-                    const properties = this.schema.properties
-                    return this.sortProperties(properties)
+                    const properties = this.schema.properties;
+                    return this.sortProperties(properties);
                 }
 
                 return undefined;
-            }
+            },
         },
         methods: {
             getPropertiesValue(properties) {
@@ -90,8 +104,7 @@
                     return properties;
                 }
 
-                return Object
-                    .entries(properties)
+                return Object.entries(properties)
                     .sort((a, b) => {
                         if (a[0] === "id") {
                             return -1;
@@ -99,8 +112,12 @@
                             return 1;
                         }
 
-                        const aRequired = (this.schema.required || []).includes(a[0]);
-                        const bRequired = (this.schema.required || []).includes(b[0]);
+                        const aRequired = (this.schema.required || []).includes(
+                            a[0],
+                        );
+                        const bRequired = (this.schema.required || []).includes(
+                            b[0],
+                        );
 
                         if (aRequired && !bRequired) {
                             return -1;
@@ -121,7 +138,7 @@
                     })
                     .reduce((result, entry) => {
                         result[entry[0]] = entry[1];
-                        return result
+                        return result;
                     }, {});
             },
             onObjectInput(properties, value) {
@@ -151,11 +168,23 @@
 </script>
 
 <style lang="scss" scoped>
-    .el-form-item.is-required:not(.is-no-asterisk).asterisk-left {
-         > :deep(.el-form-item__label) {
-             display: flex;
+@import "../../code/styles/code.scss";
 
-        }
+.type-tag {
+    background-color: var(--ks-tag-background);
+    color: var(--ks-tag-content);
+}
+
+.el-form-item.is-required:not(.is-no-asterisk).asterisk-left {
+    > :deep(.el-form-item__label) {
+        display: flex;
     }
+}
 
+.el-form-item {
+    > :deep(.el-form-item__label) {
+        align-items: center;
+        justify-content: flex-start;
+    }
+}
 </style>
