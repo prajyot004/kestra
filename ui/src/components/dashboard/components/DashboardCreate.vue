@@ -153,8 +153,11 @@ charts:
         methods: {
             async save(input) {
                 const dashboard = await this.$store.dispatch("dashboard/create", input);
+
+                this.$toast().saved(dashboard.title);
+
                 this.$store.dispatch("core/isUnsaved", false);
-                this.$router.push({name: "dashboards/update", params: {id: dashboard.id}});
+                this.$router.push({name: "home", params: {id: dashboard.id}});
             }
         },
         computed: {

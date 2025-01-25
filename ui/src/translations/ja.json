@@ -646,11 +646,11 @@
     "welcome": {
       "tutorial": {
         "title": "チュートリアル",
-        "text": "```\n* [ビデオチュートリアル](https://kestra.io/tutorial-videos/all)\n* [ドキュメント](https://kestra.io/docs)\n* [Blueprints](https://kestra.io/blueprints)\n```"
+        "text": "----------\n\n * <a href=\"https://kestra.io/tutorial-videos/all\" target=\"_blank\">ビデオチュートリアル</a> \n* <a href=\"https://kestra.io/docs\" target=\"_blank\">ドキュメント</a> \n* <a href=\"https://kestra.io/blueprints\" target=\"_blank\">Blueprints</a>"
       },
       "tour": {
         "title": "製品ツアーを体験する",
-        "text": "ユースケースを選択し、ステップバイステップのガイドに従ってKestraの機能と能力を学びましょう。❤️"
+        "text": "ユースケースを選択し、ステップバイステップガイドに従って、Kestraの機能と能力を学びましょう。❤️"
       },
       "help": {
         "text": "Slackコミュニティで質問してください。行き詰まった場合は、私たちがサポートします。✋",

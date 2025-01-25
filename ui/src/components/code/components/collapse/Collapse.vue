@@ -1,5 +1,5 @@
 <template>
-    <el-collapse v-model="expanded" class="mt-3 collapse">
+    <el-collapse v-model="expanded" class="collapse">
         <el-collapse-item
             v-for="(item, index) in props.items"
             :key="index"

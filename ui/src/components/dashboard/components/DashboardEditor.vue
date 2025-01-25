@@ -114,7 +114,7 @@
                         class="plugin-doc combined-right-view enhance-readability"
                         :override-intro="intro"
                     />
-                    <div class="d-flex justify-content-center align-items-center w-100 p-5" v-if="currentView === views.CHART">
+                    <div class="d-flex justify-content-center align-items-center w-100 p-5" v-else-if="currentView === views.CHART">
                         <div v-if="selectedChart" class="w-100">
                             <p class="fs-6 fw-bold">
                                 {{ selectedChart.chartOptions?.displayName ?? selectedChart.id }}

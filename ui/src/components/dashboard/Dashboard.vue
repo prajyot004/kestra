@@ -499,7 +499,8 @@
 
     watch(
         route,
-        () => {
+        async () => {
+            await handleCustomUpdate(route.params?.id ? {id: route.params?.id} : undefined);
             fetchAll();
         },
         {immediate: true, deep: true},

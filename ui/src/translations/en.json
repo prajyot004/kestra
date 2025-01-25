@@ -715,12 +715,11 @@
     "welcome": {
       "tour": {
         "title": "Take a product tour",
-        "text": "Chose your use case and follow a step-by-step guide to learn Kestra 's features and capabilities. ❤️"
+        "text": "Choose your use case and follow a step-by-step guide to learn Kestra's features and capabilities. ❤️"
       },
       "tutorial": {
         "title": "Tutorial",
-        "text": "* [Video Tutorials](https://kestra.io/tutorial-videos/all)\n* [Documentation](https://kestra.io/docs)\n* [Blueprints](https://kestra.io/blueprints)"
-      },
+        "text": " * <a href=\"https://kestra.io/tutorial-videos/all\" target=\"_blank\">Video Tutorials</a> \n* <a href=\"https://kestra.io/docs\" target=\"_blank\">Documentation</a> \n* <a href=\"https://kestra.io/blueprints\" target=\"_blank\">Blueprints</a>"      },
       "help": {
         "title": "Need help?",
         "text": "Ask any question in our Slack community. If you are stuck, we are help to help you. ✋"

@@ -46,11 +46,12 @@
     }
 
     &.is-text {
-        font-weight: bold;
         border: 1px solid var(--ks-border-primary);
         height: 32px;
         line-height: 32px;
-        background-color: var(--ks-background-card) !important;
+        font-weight: normal;
+        --el-button-background-color: var(--ks-background-card);
+        --el-button-text-color: var(--ks-content-primary);
 
         &.version {
             --el-button-text-color: var(--ks-content-primary);
@@ -160,6 +161,8 @@
 
 
 .el-select {
+    --el-disabled-text-color: var(--ks-content-inactive);
+
     &.fit-text .el-select__input {
         width: fit-content !important;
     }
@@ -181,6 +184,12 @@
         &.is-disabled {
             html.dark & {
                 background-color: var(--bs-gray-400);
+            }
+
+            .el-select__suffix {
+                .el-select__caret {
+                    color: var(--ks-content-inactive);
+                }
             }
         }
     }

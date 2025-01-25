@@ -646,7 +646,7 @@
     "welcome": {
       "tutorial": {
         "title": "Tutorial",
-        "text": "* [Video Tutorial](https://kestra.io/tutorial-videos/all)\n* [Documentazione](https://kestra.io/docs)\n* [Blueprints](https://kestra.io/blueprints)"
+        "text": "* <a href=\"https://kestra.io/tutorial-videos/all\" target=\"_blank\">Video Tutorial</a> \n* <a href=\"https://kestra.io/docs\" target=\"_blank\">Documentazione</a> \n* <a href=\"https://kestra.io/blueprints\" target=\"_blank\">Blueprint</a>"
       },
       "tour": {
         "title": "Fai un tour del prodotto",

@@ -1,13 +1,15 @@
-import {Breadcrumb} from "../components/code/utils/types";
+import {Breadcrumb, Component} from "../components/code/utils/types";
 
 interface State {
     breadcrumbs: Breadcrumb[];
+    panel: Component;
 }
 
 export default {
     namespaced: true,
     state: (): State => ({
         breadcrumbs: [],
+        panel: undefined,
     }),
     mutations: {
         addBreadcrumbs(
@@ -31,6 +33,12 @@ export default {
         },
         clearBreadcrumbs(state: State) {
             state.breadcrumbs = [];
+        },
+        setPanel(state: State, panel: Component) {
+            state.panel = panel;
+        },
+        unsetPanel(state: State) {
+            state.panel = undefined;
         },
     },
 };

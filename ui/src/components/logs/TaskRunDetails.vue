@@ -695,6 +695,10 @@
             margin-bottom: 0;
             border: 1px solid var(--ks-border-primary);
 
+            :deep(.el-card__body) {
+                padding: 0;
+            }
+
             .attempt-wrapper & {
                 border-radius: .25rem;
             }
@@ -704,7 +708,7 @@
             }
 
             .attempt-header {
-                padding: .5rem;
+                padding: 0 .5rem .5rem;
                 border-bottom: 1px solid var(--ks-border-primary);
             }
 
@@ -728,7 +732,6 @@
         .log-lines {
             max-height: 50vh;
             transition: max-height 0.2s ease-out;
-            margin-top: .5rem;
 
             .line {
                 padding: 1rem;

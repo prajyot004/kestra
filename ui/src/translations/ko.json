@@ -646,7 +646,7 @@
     "welcome": {
       "tutorial": {
         "title": "튜토리얼",
-        "text": "```\n* [비디오 튜토리얼](https://kestra.io/tutorial-videos/all)\n* [문서](https://kestra.io/docs)\n* [Blueprints](https://kestra.io/blueprints)\n```"
+        "text": "* <a href=\"https://kestra.io/tutorial-videos/all\" target=\"_blank\">비디오 튜토리얼</a>  \n* <a href=\"https://kestra.io/docs\" target=\"_blank\">문서</a>  \n* <a href=\"https://kestra.io/blueprints\" target=\"_blank\">Blueprints</a>"
       },
       "tour": {
         "title": "제품 투어 시작하기",

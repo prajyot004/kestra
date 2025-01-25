@@ -398,7 +398,15 @@
 
     .attempt-header {
         .el-select {
-            width: 8rem;
+            width: 10rem;
+            height: 24px;
+            margin-top: 0.35rem;
+
+            :deep(.el-select__wrapper) {
+                height: 24px;
+                min-height: 24px;
+            }
+
         }
 
         .attempt-number {

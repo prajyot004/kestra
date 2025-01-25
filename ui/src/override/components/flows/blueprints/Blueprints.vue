@@ -2,7 +2,7 @@
     <top-nav-bar v-if="!embed" :title="routeInfo.title" />
     <dotted-layout
         :embed="embed"
-        :phrase="$t('blueprints.header.catch phrase.2', {kind: kind})"
+        :phrase="$t('blueprints.header.catch phrase.2', {kind})"
         :alt="$t('blueprints.header.alt')"
         :image="headerImage"
         :image-dark="headerImageDark"

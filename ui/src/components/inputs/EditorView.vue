@@ -173,11 +173,11 @@
                 v-if="viewType === editorViewTypes.SOURCE_BLUEPRINTS"
                 class="combined-right-view enhance-readability"
             >
-                <Blueprints @loaded="blueprintsLoaded = true" embed />
+                <Blueprints @loaded="blueprintsLoaded = true" embed kind="flow" />
             </div>
 
             <div
-                v-if="viewType === editorViewTypes.SOURCE_TOPOLOGY || viewType === editorViewTypes.TOPOLOGY"
+                v-else-if="viewType === editorViewTypes.SOURCE_TOPOLOGY || viewType === editorViewTypes.TOPOLOGY"
                 :class="viewType === editorViewTypes.SOURCE_TOPOLOGY ? 'combined-right-view' : 'vueflow'"
                 class="topology-display"
             >
@@ -206,7 +206,7 @@
             </div>
 
             <PluginDocumentation
-                v-if="viewType === editorViewTypes.SOURCE_DOC"
+                v-else-if="viewType === editorViewTypes.SOURCE_DOC"
                 class="plugin-doc combined-right-view enhance-readability"
             />
         </div>
@@ -342,8 +342,8 @@
     import EditorButtons from "./EditorButtons.vue";
     import Drawer from "../Drawer.vue";
     import {ElMessageBox} from "element-plus";
-    
     import NoCode from "../code/NoCode.vue";
+    import localUtils from "../../utils/utils";
 
     const store = useStore();
     const router = useRouter();
@@ -494,7 +494,7 @@
     });
 
     const editorViewType = ref("YAML");
-   
+
     const handleTopologyEditClick = (params) => {
         editorViewType.value = "NO_CODE";
         nextTick(() => router.replace({query: {...route.query, ...params}}))
@@ -1085,6 +1085,8 @@
                 }
             });
         } else {
+            if(!currentTab.value.dirty) return;
+
             await store.dispatch("namespace/createFile", {
                 namespace: props.namespace ?? routeParams.id,
                 path: currentTab.value.path ?? currentTab.value.name,
@@ -1317,10 +1319,9 @@
         closeTabs(openedTabs.value.slice(index + 1).filter(tab => tab !== FLOW_TAB.value), openedTabs.value[index]);
     };
 
-    import localUtils from "../../utils/utils";
     const exportYaml = () => {
         const blob = new Blob([flowYaml.value], {type: "text/yaml"});
-        localUtils.downloadUrl(window.URL.createObjectURL(blob), "flow.yaml"); 
+        localUtils.downloadUrl(window.URL.createObjectURL(blob), "flow.yaml");
     };
 </script>
 

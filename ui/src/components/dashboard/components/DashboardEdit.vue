@@ -3,8 +3,8 @@
     <section class="full-container">
         <dashboard-editor
             @save="save"
-            v-if="dashboardSource"
-            :initial-source="dashboardSource"
+            v-if="item && item.sourceCode"
+            :initial-source="item.sourceCode"
         />
     </section>
 </template>
@@ -22,30 +22,34 @@
         },
         methods: {
             async save(input) {
-                await this.$store.dispatch("dashboard/update", {
+                const response = await this.$store.dispatch("dashboard/update", {
                     id: this.$route.params.id,
                     source: input,
                 });
+
+                this.$toast().saved(response.title);
+
                 this.$store.dispatch("core/isUnsaved", false);
             },
         },
         data() {
             return {
-                dashboardSource: undefined,
+                item: undefined,
             };
         },
         beforeMount() {
             this.$store
                 .dispatch("dashboard/load", this.$route.params.id)
                 .then((dashboard) => {
-                    this.dashboardSource = dashboard.sourceCode;
+                    this.item = dashboard;
                 });
         },
         computed: {
             routeInfo() {
                 const id = this.$route.params.id;
+
                 return {
-                    title: id,
+                    title:  this.item?.title || id,
                     breadcrumb: [
                         {
                             label: this.$t("custom_dashboard"),
