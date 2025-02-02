@@ -520,14 +520,14 @@ public class JsonSchemaGenerator {
                 .stream()
                 .flatMap(registeredPlugin -> registeredPlugin.getTaskRunners().stream())
                 .filter(Predicate.not(io.kestra.core.models.Plugin::isInternal))
-                .flatMap(clz -> safelyResolveSubtype(declaredType, clz, typeContext).stream())
+                .map(typeContext::resolve)
                 .toList();
         } else if (declaredType.getErasedType() == LogExporter.class) {
             return getRegisteredPlugins()
                 .stream()
                 .flatMap(registeredPlugin -> registeredPlugin.getLogExporters().stream())
                 .filter(Predicate.not(io.kestra.core.models.Plugin::isInternal))
-                .flatMap(clz -> safelyResolveSubtype(declaredType, clz, typeContext).stream())
+                .map(typeContext::resolve)
                 .toList();
         } else if (declaredType.getErasedType() == Chart.class) {
             return getRegisteredPlugins()

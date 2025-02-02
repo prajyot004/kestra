@@ -71,6 +71,7 @@
             <el-switch
                 v-if="!isNamespace"
                 v-model="editorViewType"
+                @change="changeEditorViewType"
                 active-value="NO_CODE"
                 inactive-value="YAML"
                 :inactive-text="$t('no_code.labels.no_code')"
@@ -165,6 +166,8 @@
                 :flow="flowYaml"
                 @update-metadata="(e) => onUpdateMetadata(e, true)"
                 @update-task="(e) => editorUpdate(e)"
+                @reorder="(yaml) => handleReorder(yaml)"
+                @update-documentation="(task) => updatePluginDocumentation(undefined, task)"
             />
         </div>
         <div class="slider" @mousedown.prevent.stop="dragEditor" v-if="combinedEditor" />
@@ -494,8 +497,18 @@
     });
 
     const editorViewType = ref("YAML");
+    const changeEditorViewType = (value) => {
+        localStorage.setItem(storageKeys.EDITOR_VIEW_TYPE, value);
+
+        if(value === "NO_CODE") {
+            editorWidth.value = editorWidth.value > 33.3 ? 33.3 : editorWidth.value;
+        }
+    }
 
     const handleTopologyEditClick = (params) => {
+        if (viewType.value === editorViewTypes.TOPOLOGY) {
+            switchViewType(editorViewTypes.SOURCE_TOPOLOGY);
+        }
         editorViewType.value = "NO_CODE";
         nextTick(() => router.replace({query: {...route.query, ...params}}))
     }
@@ -633,7 +646,7 @@
 
         // validate flow on first load
         store
-            .dispatch("flow/validateFlow", {flow: yamlWithNextRevision.value})
+            .dispatch("flow/validateFlow", {flow: props.isCreating ? flowYaml.value : yamlWithNextRevision.value})
             .then((value) => {
                 if (validationDomElement.value && editorDomElement.value) {
                     validationDomElement.value.onResize(
@@ -729,13 +742,14 @@
         emit(type, event);
     };
 
-    const updatePluginDocumentation = (event) => {
-        const taskType = YamlUtils.getTaskType(
-            event.model.getValue(),
-            event.position
-        );
+    const updatePluginDocumentation = (event, task) => {
         const pluginSingleList = store.getters["plugin/getPluginSingleList"];
-        if (taskType && pluginSingleList && pluginSingleList.includes(taskType)) {
+        const taskType = task !== undefined ? task : YamlUtils.getTaskType(
+            event.model.getValue(),
+            event.position,
+            pluginSingleList
+        );
+        if (taskType) {
             store.dispatch("plugin/load", {cls: taskType}).then((plugin) => {
                 store.commit("plugin/setEditorPlugin", {cls: taskType, ...plugin});
             });
@@ -786,8 +800,8 @@
         }
 
         haveChange.value = true;
-        store.dispatch("core/isUnsaved", true);
-
+        if(editorViewType.value === "YAML") store.dispatch("core/isUnsaved", true);
+        
         if(!props.isCreating){
             store.commit("editor/changeOpenedTabs", {
                 action: "dirty",
@@ -803,7 +817,7 @@
         if(!currentIsFlow) return;
 
         return store
-            .dispatch("flow/validateFlow", {flow: yamlWithNextRevision.value})
+            .dispatch("flow/validateFlow", {flow: props.isCreating ? flowYaml.value : yamlWithNextRevision.value})
             .then((value) => {
                 if (
                     flowHaveTasks() &&
@@ -909,7 +923,9 @@
         );
     };
 
-    const validateFlow = (flow = yamlWithNextRevision.value) => {
+    const validateFlow = (flow) => {
+        if(!flow) return;
+
         return store
             .dispatch("flow/validateFlow", {flow})
             .then((value) => {
@@ -929,7 +945,7 @@
         if(shouldSave) {
             metadata.value = {...metadata.value, ...event};
             onSaveMetadata();
-            validateFlow()
+            validateFlow(flowYaml.value)
 
         } else {
             metadata.value = event;
@@ -942,6 +958,12 @@
         metadata.value = null;
         isEditMetadataOpen.value = false;
         haveChange.value = true;
+    };
+
+    const handleReorder = (yaml) => {
+        flowYaml.value = yaml;
+        haveChange.value = true;
+        save()
     };
 
     const editorUpdate = (event) => {
@@ -1048,7 +1070,7 @@
 
         haveChange.value = false;
         await store.dispatch("flow/validateFlow", {
-            flow: yamlWithNextRevision.value,
+            flow: props.isCreating ? flowYaml.value : yamlWithNextRevision.value
         });
     };
 
@@ -1193,10 +1215,13 @@
         const {offsetWidth, parentNode} = document.getElementById("editorWrapper");
         let blockWidthPercent = (offsetWidth / parentNode.offsetWidth) * 100;
 
+        const isNoCode = localStorage.getItem(storageKeys.EDITOR_VIEW_TYPE) === "NO_CODE";
+        const maxWidth = isNoCode ? 33.3 : 75;
+
         document.onmousemove = function onMouseMove(e) {
             let percent = blockWidthPercent + ((e.clientX - dragX) / parentNode.offsetWidth) * 100;
 
-            editorWidth.value = percent > 75 ? 75 : percent < 25 ? 25 : percent;
+            editorWidth.value = percent > maxWidth ? maxWidth : percent < 25 ? 25 : percent;
             validationDomElement.value.onResize((percent * parentNode.offsetWidth) / 100);
         };
 

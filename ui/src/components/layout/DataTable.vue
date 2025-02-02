@@ -9,7 +9,7 @@
         <el-container data-component="FILENAME_PLACEHOLDER#container" direction="vertical" v-loading="isLoading">
             <slot name="top" data-component="FILENAME_PLACEHOLDER#top" />
 
-            <pagination v-if="!embed" :size="size" :top="true" :page="page" :total="total" :max="max" @page-changed="onPageChanged">
+            <pagination v-if="!embed" :size="size" :top="true" :page="page" :total="total" @page-changed="onPageChanged">
                 <template #search>
                     <slot name="search" />
                 </template>
@@ -17,7 +17,7 @@
 
             <slot name="table" data-component="FILENAME_PLACEHOLDER#table" />
 
-            <pagination v-if="total > 0" :size="size" :page="page" :total="total" :max="max" @page-changed="onPageChanged" />
+            <pagination v-if="total > 0" :size="size" :page="page" :total="total" @page-changed="onPageChanged" />
         </el-container>
     </div>
 </template>
@@ -41,7 +41,6 @@
         },
         props: {
             total: {type: Number, required: true},
-            max: {type: Number, required: false, default: undefined},
             size: {type: Number, default: 25},
             page: {type: Number, default: 1},
             embed: {type: Boolean, default: false},
@@ -57,13 +56,3 @@
         },
     };
 </script>
-
-<style scoped lang="scss">
-    :deep(.el-table) {
-        td {
-            .el-tag {
-                margin-right: .3rem;
-            }
-        }
-    }
-</style>

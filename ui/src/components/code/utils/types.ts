@@ -63,10 +63,11 @@ export type CollapseItem = {
 export type Breadcrumb = {
     label: string;
     to: {
-        name: RouteRecordName;
-        params: RouteParams;
+        name?: RouteRecordName;
+        params?: RouteParams;
     };
     component?: ReturnType<typeof defineComponent>;
+    panel?: boolean;
 };
 
 export type Component = ReturnType<typeof defineComponent>;

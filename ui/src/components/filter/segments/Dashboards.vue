@@ -1,7 +1,7 @@
 <template>
     <el-dropdown trigger="click" placement="bottom-end">
         <KestraIcon placement="bottom">
-            <el-button :icon="ViewDashboardEdit">
+            <el-button :icon="Menu">
                 {{ selectedDashboard ?? $t('default_dashboard') }}
             </el-button>
         </KestraIcon>
@@ -73,7 +73,7 @@
 <script setup lang="ts">
     import {onBeforeMount, ref, computed, getCurrentInstance} from "vue";
     import KestraIcon from "../../Kicon.vue";
-    import {ViewDashboardEdit, Plus, DeleteOutline, Magnify, Pencil} from "../utils/icons";
+    import {Menu, Plus, DeleteOutline, Magnify, Pencil} from "../utils/icons";
     import {useI18n} from "vue-i18n";
     import {useStore} from "vuex";
     import {useRouter, useRoute} from "vue-router";
