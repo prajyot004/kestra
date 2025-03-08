@@ -25,7 +25,7 @@ import java.util.Optional;
 @Schema(
     title = "Return a value for debugging purposes.",
     description = """
-        This task is intended for troubleshooting. 
+        This task is intended for troubleshooting.
 
         It allows you to return templated values, inputs or outputs."""
 )
@@ -68,8 +68,8 @@ public class Return extends Task implements RunnableTask<Return.Output> {
         long end = System.nanoTime();
 
         runContext
-            .metric(Counter.of("length", Optional.ofNullable(render).map(String::length).orElse(0), "format", render))
-            .metric(Timer.of("duration", Duration.ofNanos(end - start), "format", render));
+            .metric(Counter.of("length", Optional.ofNullable(render).map(String::length).orElse(0)))
+            .metric(Timer.of("duration", Duration.ofNanos(end - start)));
 
         return Output.builder()
             .value(render)

@@ -3,7 +3,7 @@
         <el-form-item>
             <template #label>
                 <div class="type-div">
-                    <code>type</code>
+                    <code>{{ $t("type") }}</code>
                 </div>
             </template>
             <plugin-select
@@ -32,6 +32,7 @@
     import {SECTIONS} from "../../utils/constants.js";
 
     export default {
+        inheritAttrs: false,
         computed: {
             ...mapGetters("flow", ["taskError"]),
         },

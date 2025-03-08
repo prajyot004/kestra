@@ -178,7 +178,7 @@ public abstract class AbstractRunnerTest {
         restartCaseTest.restartMultiple();
     }
 
-    @Test
+    @RetryingTest(5) // Flaky on CI but never locally even with 100 repetitions
     @LoadFlows({"flows/valids/restart_always_failed.yaml"})
     void restartFailedThenFailureWithGlobalErrors() throws Exception {
         restartCaseTest.restartFailedThenFailureWithGlobalErrors();
@@ -234,6 +234,14 @@ public abstract class AbstractRunnerTest {
         "flows/valids/flow-trigger-preconditions-flow-b.yaml"})
     void flowTriggerPreconditions() throws Exception {
         multipleConditionTriggerCaseTest.flowTriggerPreconditions();
+    }
+
+    @Test
+    @LoadFlows({"flows/valids/flow-trigger-preconditions-flow-listen.yaml",
+        "flows/valids/flow-trigger-preconditions-flow-a.yaml",
+        "flows/valids/flow-trigger-preconditions-flow-b.yaml"})
+    void flowTriggerPreconditionsMergeOutputs() throws Exception {
+        multipleConditionTriggerCaseTest.flowTriggerPreconditionsMergeOutputs();
     }
 
     @RetryingTest(5)
@@ -359,10 +367,17 @@ public abstract class AbstractRunnerTest {
         forEachItemCaseTest.forEachItemWithSubflowOutputs();
     }
 
-    @Test
+    @RetryingTest(5) // Flaky on CI but never locally even with 100 repetitions
     @LoadFlows({"flows/valids/restart-for-each-item.yaml", "flows/valids/restart-child.yaml"})
     void restartForEachItem() throws Exception {
         forEachItemCaseTest.restartForEachItem();
+    }
+
+    @RetryingTest(5)
+    @LoadFlows({"flows/valids/for-each-item-subflow.yaml",
+        "flows/valids/for-each-item-in-if.yaml"})
+    protected void forEachItemInIf() throws Exception {
+        forEachItemCaseTest.forEachItemInIf();
     }
 
     @Test
@@ -383,7 +398,7 @@ public abstract class AbstractRunnerTest {
         flowConcurrencyCaseTest.flowConcurrencyQueue();
     }
 
-    @Test
+    @RetryingTest(5) // Flaky on CI but never locally even with 100 repetitions
     @LoadFlows({"flows/valids/flow-concurrency-queue-pause.yml"})
     void concurrencyQueuePause() throws Exception {
         flowConcurrencyCaseTest.flowConcurrencyQueuePause();

@@ -31,9 +31,12 @@
     import {useRouter} from "vue-router";
     const router = useRouter();
 
-    import Utils from "../../../../../utils/utils.js";
-    import {getScheme} from "../../../../../utils/scheme.js";
+    import Utils, {useTheme} from "../../../../../utils/utils.js";
+    import {useScheme} from "../../../../../utils/scheme.js";
     import {defaultConfig, tooltip, getFormat} from "../../../../../utils/charts.js";
+
+    import {State} from "@kestra-io/ui-libs";
+    const ORDER = State.arrayAllStates().map((state) => state.name);
 
     const {t} = useI18n({useScope: "global"});
 
@@ -68,6 +71,9 @@
         },
     });
 
+    const theme = useTheme()
+    const scheme = useScheme();
+
     const tooltipContent = ref("")
 
     const parsedData = computed(() => {
@@ -76,7 +82,7 @@
                 if (accumulator[state] === undefined) {
                     accumulator[state] = {
                         label: state,
-                        backgroundColor: getScheme(state),
+                        backgroundColor: scheme.value[state],
                         yAxisID: "y",
                         data: [],
                     };
@@ -87,6 +93,10 @@
 
             return accumulator;
         }, Object.create(null));
+
+        datasets = Object.values(datasets).sort((a, b) => {
+            return ORDER.indexOf(a.label) - ORDER.indexOf(b.label);
+        });
 
         return {
             labels: props.data.map((r) =>
@@ -113,7 +123,6 @@
                 : Object.values(datasets),
         };
     });
-
 
     const options = computed(() =>
         defaultConfig({
@@ -227,7 +236,7 @@
                     });
                 }
             },
-        }),
+        }, theme.value),
     );
 </script>
 

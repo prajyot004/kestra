@@ -1,9 +1,9 @@
 package io.kestra.cli.commands.plugins;
 
-import com.google.common.base.Charsets;
 import com.google.common.io.Files;
 import io.kestra.cli.AbstractCommand;
 import io.kestra.core.docs.DocumentationGenerator;
+import io.kestra.core.plugins.PluginRegistry;
 import io.kestra.core.plugins.RegisteredPlugin;
 import io.kestra.core.serializers.JacksonMapper;
 import io.micronaut.context.ApplicationContext;
@@ -43,8 +43,10 @@ public class PluginDocCommand extends AbstractCommand {
         super.call();
         DocumentationGenerator documentationGenerator = applicationContext.getBean(DocumentationGenerator.class);
 
-        List<RegisteredPlugin> plugins = core ?  pluginRegistry().plugins() : pluginRegistry().externalPlugins();
+        PluginRegistry registry = pluginRegistryProvider.get();
+        List<RegisteredPlugin> plugins = core ? registry.plugins() : registry.externalPlugins();
         boolean hasFailures = false;
+
         for (RegisteredPlugin registeredPlugin : plugins) {
             try {
                 documentationGenerator
@@ -61,7 +63,7 @@ public class PluginDocCommand extends AbstractCommand {
                                 Files
                                     .asCharSink(
                                         file,
-                                        Charsets.UTF_8
+                                        StandardCharsets.UTF_8
                                     ).write(s.getBody());
                                 stdOut("Generate doc in: {0}", file);
 
@@ -100,5 +102,11 @@ public class PluginDocCommand extends AbstractCommand {
         }
 
         return hasFailures ? 1 : 0;
+    }
+
+    /** {@inheritDoc} **/
+    @Override
+    protected boolean isPluginManagerEnabled() {
+        return false;
     }
 }

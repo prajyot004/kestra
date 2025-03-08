@@ -35,7 +35,7 @@
                     />
                 </template>
                 <template v-if="embeddedTab === 'custom'" #content>
-                    <DemoBlueprints />
+                    <DemoBlueprints :embed />
                 </template>
             </blueprints-browser>
         </section>
@@ -123,6 +123,11 @@
                 this.embeddedTab = newTab.name;
             },
 
+        },
+        watch: {
+            tab(newVal) {
+                this.embeddedTab = newVal;
+            }
         }
     };
 </script>

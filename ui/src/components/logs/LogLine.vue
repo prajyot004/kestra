@@ -85,7 +85,7 @@
             };
         },
         async created() {
-            this.renderedMarkdown = await Markdown.render(this.message, {onlyLink: true});
+            this.renderedMarkdown = await Markdown.render(this.message, {onlyLink: true, html: true});
         },
         computed: {
             logLineStyle() {
@@ -218,6 +218,9 @@ div.line {
     }
 
     .log-content {
+        // prevent Firefox word breaks 
+        flex-grow: 1;
+
         .header > * + * {
             margin-left: 1rem;
         }
