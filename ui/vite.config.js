@@ -6,6 +6,8 @@ import {filename} from "./plugins/filename"
 import {commit} from "./plugins/commit"
 import {codecovVitePlugin} from "@codecov/vite-plugin";
 
+const normalizePath = (p) => path.resolve(__dirname, p).replace(/\\/g, "/");
+
 export const manualChunks = {
     // bundle dashboard and all its dependencies in a single chunk
     "dashboard": [
@@ -37,16 +39,17 @@ export default defineConfig({
                 manualChunks
             }
         },
+        sourcemap: false,
     },
     resolve: {
         alias: {
-            "override": path.resolve(__dirname, "src/override/"),
-            "#imports": path.resolve(__dirname, "node_modules/@kestra-io/ui-libs/stub-mdc-imports.js"),
-            "#build/mdc-image-component.mjs": path.resolve(__dirname, "node_modules/@kestra-io/ui-libs/stub-mdc-imports.js"),
-            "#mdc-imports": path.resolve(__dirname, "node_modules/@kestra-io/ui-libs/stub-mdc-imports.js"),
-            "#mdc-configs": path.resolve(__dirname, "node_modules/@kestra-io/ui-libs/stub-mdc-imports.js"),
-            "shiki": path.resolve(__dirname, "node_modules/shiki/dist"),
-            "vuex": path.resolve(__dirname, "node_modules/vuex/dist/vuex.esm-bundler.js"),
+            "override": normalizePath("src/override/"),
+            "#imports": normalizePath("node_modules/@kestra-io/ui-libs/stub-mdc-imports.js"),
+            "#build/mdc-image-component.mjs": normalizePath("node_modules/@kestra-io/ui-libs/stub-mdc-imports.js"),
+            "#mdc-imports": normalizePath("node_modules/@kestra-io/ui-libs/stub-mdc-imports.js"),
+            "#mdc-configs": normalizePath("node_modules/@kestra-io/ui-libs/stub-mdc-imports.js"),
+            "shiki": normalizePath("node_modules/shiki/dist"),
+            "vuex": normalizePath("node_modules/vuex/dist/vuex.esm-bundler.js"),
         },
     },
     plugins: [

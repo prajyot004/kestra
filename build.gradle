@@ -53,7 +53,7 @@ idea {
  * Main
  **********************************************************************************************************************/
 final mainClassName = "io.kestra.cli.App"
-final targetJavaVersion = JavaVersion.VERSION_21
+final targetJavaVersion = JavaVersion.VERSION_23
 
 application {
     mainClass = mainClassName

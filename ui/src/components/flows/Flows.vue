@@ -38,7 +38,7 @@
         </template>
     </top-nav-bar>
     <section
-        data-component="FILENAME_PLACEHOLDER"
+        data-component="normalizePath('H:\\openSource Projects\\kestra\\kestra\\ui\\src\\components\\flows\\Flows.vue')"
         :class="{container: topbar}"
         v-if="ready"
     >
@@ -370,6 +370,8 @@
     import Kicon from "../Kicon.vue";
     import Labels from "../layout/Labels.vue";
     import {storageKeys} from "../../utils/constants";
+
+    const normalizePath = (p) => p.replace(/\\/g, "/");
 
     export default {
         mixins: [RouteContext, RestoreUrl, DataTableActions, SelectTableActions],
