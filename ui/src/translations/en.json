@@ -433,7 +433,7 @@
       "namespacesErrorExecutions": "Executions errors per namespace",
       "failedExecutions": "Failed executions",
       "errorLogs": "Errors logs",
-      "no executions": "Ready to see your flow in action?"
+      "no executions": "Ready to see your flow in action? sdf"
     },
     "dashboards": "Dashboards",
     "executions replayed": "<code>{executionCount}</code> executions(s) replayed",
