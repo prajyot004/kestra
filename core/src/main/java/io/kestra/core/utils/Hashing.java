@@ -1,10 +1,11 @@
 package io.kestra.core.utils;
 
-import com.google.common.hash.HashCode;
 import java.nio.charset.StandardCharsets;
-
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+
+import com.google.common.hash.HashCode;
+import org.apache.commons.lang3.StringUtils;
 
 /**
  * Utilities for hashing.
@@ -23,6 +24,18 @@ public final class Hashing {
     }
 
     /**
+     * Returns a consistent hash value for the given input strings, using
+     * a non-cryptographic hash function.
+     * Each string will be concatenated before hashing.
+     *
+     * @param values the values to be hashed.
+     * @return the string hash value.
+     */
+    public static String hashToString(final String... values) {
+        return getHashString(StringUtils.join(values)).toString();
+    }
+
+    /**
      * Returns a consistent hash value for the given input, using
      * a non-cryptographic hash function.
      *
@@ -36,9 +49,9 @@ public final class Hashing {
     /**
      * Hashes the given value using SHA-512 algorithm.
      *
-     * @param value     the value to be hashed.
-     * @param salt      an optional salt to be added to the value.
-     * @return          the digest.
+     * @param value the value to be hashed.
+     * @param salt an optional salt to be added to the value.
+     * @return the digest.
      */
     public static byte[] sha512Hash(final byte[] value, byte[] salt) {
         try {

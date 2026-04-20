@@ -1,19 +1,21 @@
 package io.kestra.jdbc.repository;
 
-import io.kestra.core.models.flows.Flow;
-import io.kestra.jdbc.AbstractJdbcRepository;
-import org.jooq.*;
-import org.jooq.Record;
-import org.jooq.impl.DSL;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import org.jooq.*;
+import org.jooq.Record;
+import org.jooq.impl.DSL;
+
+import io.kestra.core.models.flows.Flow;
+import io.kestra.core.models.flows.FlowInterface;
+import io.kestra.jdbc.AbstractJdbcRepository;
+
 import static io.kestra.jdbc.repository.AbstractJdbcRepository.field;
 
 public abstract class JdbcFlowRepositoryService {
-    public static Table<Record> lastRevision(AbstractJdbcRepository<Flow> jdbcRepository, boolean asterisk) {
+    public static Table<Record> lastRevision(AbstractJdbcRepository<? extends FlowInterface> jdbcRepository, boolean asterisk) {
         List<SelectFieldOrAsterisk> fields = new ArrayList<>();
         if (asterisk) {
             // There is an issue in jOOQ with MySQL due to some limitations on MySQL.
@@ -34,7 +36,8 @@ public abstract class JdbcFlowRepositoryService {
 
         return jdbcRepository
             .getDslContextWrapper()
-            .transactionResult(configuration -> {
+            .transactionResult(configuration ->
+            {
                 DSLContext context = DSL.using(configuration);
 
                 return context.select(DSL.asterisk())
@@ -55,8 +58,9 @@ public abstract class JdbcFlowRepositoryService {
             conditions.add(jdbcRepository.fullTextCondition(List.of("fulltext"), query));
         }
 
-        if (labels != null)  {
-            labels.forEach((key, value) -> {
+        if (labels != null) {
+            labels.forEach((key, value) ->
+            {
                 Field<String> field = DSL.field("JQ_STRING(\"value\", '.labels." + key + "')", String.class);
 
                 if (value == null) {
@@ -67,7 +71,7 @@ public abstract class JdbcFlowRepositoryService {
             });
         }
 
-        return conditions.size() == 0 ? DSL.trueCondition() : DSL.and(conditions);
+        return conditions.isEmpty() ? DSL.noCondition() : DSL.and(conditions);
     }
 
     public static Condition findSourceCodeCondition(AbstractJdbcRepository<Flow> jdbcRepository, String query) {

@@ -1,9 +1,10 @@
 package io.kestra.core.models.executions;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+
 import io.kestra.core.models.TenantInterface;
-import io.kestra.core.models.triggers.TriggerContext;
 import io.kestra.core.runners.WorkerTask;
+
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
@@ -24,6 +25,11 @@ public class ExecutionKilledExecution extends ExecutionKilled implements TenantI
      */
     @NotNull
     String executionId;
+
+    /**
+     * The state to move the execution to after kill.
+     */
+    io.kestra.core.models.flows.State.Type executionState;
 
     /**
      * Specifies whether killing the execution, also kill all sub-flow executions.

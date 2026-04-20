@@ -1,5 +1,18 @@
 package io.kestra.core.utils;
 
+import java.io.Serial;
+import java.time.Duration;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.function.BiPredicate;
+import java.util.function.Function;
+import java.util.function.Predicate;
+
+import org.slf4j.Logger;
+
+import io.kestra.core.models.tasks.retrys.AbstractRetry;
+import io.kestra.core.models.tasks.retrys.Exponential;
+
 import dev.failsafe.Failsafe;
 import dev.failsafe.FailsafeException;
 import dev.failsafe.FailsafeExecutor;
@@ -7,47 +20,36 @@ import dev.failsafe.Fallback;
 import dev.failsafe.FallbackBuilder;
 import dev.failsafe.RetryPolicyBuilder;
 import dev.failsafe.event.ExecutionAttemptedEvent;
-import io.kestra.core.models.tasks.retrys.AbstractRetry;
-import io.kestra.core.models.tasks.retrys.Exponential;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.Logger;
 
-import java.io.Serial;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
-import java.util.List;
-import java.util.function.BiPredicate;
-import java.util.function.Function;
-import java.util.function.Predicate;
+public final class RetryUtils {
+    private RetryUtils() {
+        // utility class pattern
+    }
 
-import jakarta.inject.Singleton;
-
-@Singleton
-public class RetryUtils {
-    public <T, E extends Throwable> Instance<T, E> of() {
-        return Instance.<T, E>builder()
+    public static <T, E extends Throwable> Instance<T, E> of() {
+        return Instance.<T, E> builder()
             .build();
     }
 
-    public <T, E extends Throwable> Instance<T, E> of(AbstractRetry policy) {
-        return Instance.<T, E>builder()
+    public static <T, E extends Throwable> Instance<T, E> of(AbstractRetry policy) {
+        return Instance.<T, E> builder()
             .policy(policy)
             .build();
     }
 
-    public <T, E extends Throwable> Instance<T, E> of(AbstractRetry policy, Function<RetryFailed, E> failureFunction) {
-        return Instance.<T, E>builder()
+    public static <T, E extends Throwable> Instance<T, E> of(AbstractRetry policy, Function<RetryFailed, E> failureFunction) {
+        return Instance.<T, E> builder()
             .policy(policy)
             .failureFunction(failureFunction)
             .build();
     }
 
-    public <T, E extends Throwable> Instance<T, E> of(AbstractRetry policy, Logger logger) {
-        return Instance.<T, E>builder()
+    public static <T, E extends Throwable> Instance<T, E> of(AbstractRetry policy, Logger logger) {
+        return Instance.<T, E> builder()
             .policy(policy)
             .logger(logger)
             .build();
@@ -62,7 +64,7 @@ public class RetryUtils {
             .delayFactor(2.0)
             .interval(Duration.ofSeconds(1))
             .maxInterval(Duration.ofSeconds(10))
-            .maxAttempt(3)
+            .maxAttempts(3)
             .build();
 
         @Builder.Default
@@ -73,7 +75,8 @@ public class RetryUtils {
         public T run(Class<E> exception, CheckedSupplier<T> run) throws E {
             return wrap(
                 Failsafe
-                    .with(this.exceptionFallback(this.failureFunction)
+                    .with(
+                        this.exceptionFallback(this.failureFunction)
                             .handle(exception)
                             .build(),
                         this.toPolicy(this.policy)
@@ -149,10 +152,12 @@ public class RetryUtils {
 
         private FallbackBuilder<T> exceptionFallback(Function<RetryFailed, E> failureFunction) {
             return Fallback.builder(
-                (ExecutionAttemptedEvent<? extends T> executionAttemptedEvent) -> {
+                (ExecutionAttemptedEvent<? extends T> executionAttemptedEvent) ->
+                {
                     RetryFailed retryFailed = new RetryFailed(executionAttemptedEvent);
                     throw failureFunction != null ? failureFunction.apply(retryFailed) : retryFailed;
-                });
+                }
+            );
         }
 
         private RetryPolicyBuilder<T> toPolicy(AbstractRetry abstractRetry) {
@@ -160,19 +165,23 @@ public class RetryUtils {
             Logger currentLogger = this.logger != null ? this.logger : log;
 
             retryPolicy
-                .onFailure(event -> currentLogger.warn(
-                    "Stop retry{}, elapsed {} and {} attempts",
-                    finalMethod(),
-                    event.getElapsedTime().truncatedTo(ChronoUnit.SECONDS),
-                    event.getAttemptCount(),
-                    event.getException()
-                ))
-                .onRetry(event -> currentLogger.info(
-                    "Retrying{}, elapsed {} and {} attempts",
-                    finalMethod(),
-                    event.getElapsedTime().truncatedTo(ChronoUnit.SECONDS),
-                    event.getAttemptCount()
-                ));
+                .onFailure(
+                    event -> currentLogger.warn(
+                        "Stop retry{}, elapsed {} and {} attempts",
+                        finalMethod(),
+                        event.getElapsedTime().truncatedTo(ChronoUnit.SECONDS),
+                        event.getAttemptCount(),
+                        event.getException()
+                    )
+                )
+                .onRetry(
+                    event -> currentLogger.info(
+                        "Retrying{}, elapsed {} and {} attempts",
+                        finalMethod(),
+                        event.getElapsedTime().truncatedTo(ChronoUnit.SECONDS),
+                        event.getAttemptCount()
+                    )
+                );
             return retryPolicy;
         }
 
@@ -199,7 +208,6 @@ public class RetryUtils {
 
         private final int attemptCount;
         private final Duration elapsedTime;
-        private final Instant startTime;
 
         public <T> RetryFailed(ExecutionAttemptedEvent<? extends T> event) {
             super(
@@ -210,7 +218,6 @@ public class RetryUtils {
 
             this.attemptCount = event.getAttemptCount();
             this.elapsedTime = event.getElapsedTime();
-            this.startTime = event.getStartTime().get();
         }
     }
 }

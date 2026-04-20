@@ -1,80 +1,93 @@
 package io.kestra.jdbc.repository;
 
+import java.io.IOException;
+import java.time.ZonedDateTime;
+import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+import org.jooq.*;
+import org.jooq.Record;
+import org.jooq.impl.DSL;
+
+import io.kestra.core.exceptions.DeserializationException;
 import io.kestra.core.models.QueryFilter;
-import io.kestra.core.models.conditions.ConditionContext;
-import io.kestra.core.models.executions.Execution;
-import io.kestra.core.models.flows.Flow;
-import io.kestra.core.models.triggers.AbstractTrigger;
+import io.kestra.core.models.QueryFilter.Resource;
+import io.kestra.core.models.dashboards.ColumnDescriptor;
+import io.kestra.core.models.dashboards.DataFilter;
+import io.kestra.core.models.dashboards.DataFilterKPI;
+import io.kestra.core.models.dashboards.filters.AbstractFilter;
 import io.kestra.core.models.triggers.Trigger;
-import io.kestra.core.models.triggers.TriggerContext;
+import io.kestra.core.models.triggers.TriggerId;
 import io.kestra.core.repositories.ArrayListTotal;
 import io.kestra.core.repositories.TriggerRepositoryInterface;
-import io.kestra.core.schedulers.ScheduleContextInterface;
-import io.kestra.jdbc.runner.JdbcQueueIndexerInterface;
-import io.kestra.jdbc.runner.JdbcSchedulerContext;
+import io.kestra.core.scheduler.model.TriggerState;
+import io.kestra.core.scheduler.store.TriggerStateStore;
+import io.kestra.core.utils.DateUtils;
+import io.kestra.core.utils.ListUtils;
+import io.kestra.jdbc.JdbcMapper;
+import io.kestra.jdbc.services.JdbcFilterService;
+import io.kestra.plugin.core.dashboard.data.ITriggers;
+import io.kestra.plugin.core.dashboard.data.Triggers;
+
 import io.micronaut.data.model.Pageable;
-import jakarta.annotation.Nullable;
-import org.jooq.*;
-import org.jooq.impl.DSL;
+import lombok.Getter;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxSink;
 
-import java.time.ZonedDateTime;
-import java.util.Collection;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.function.Function;
+public abstract class AbstractJdbcTriggerRepository extends AbstractJdbcCrudRepository<TriggerState> implements TriggerRepositoryInterface, TriggerStateStore {
 
-public abstract class AbstractJdbcTriggerRepository extends AbstractJdbcRepository implements TriggerRepositoryInterface, JdbcQueueIndexerInterface<Trigger> {
-    public static final Field<Object> NAMESPACE_FIELD = field("namespace");
+    private static final Field<Object> NAMESPACE_FIELD = field("namespace");
+    private static final Field<Long> NEXT_EVALUATION_EPOCH_FIELD = field("next_evaluation_epoch", Long.class);
+    private static final Field<Boolean> LOCKED_FIELD = field("locked", Boolean.class);
+    private static final Field<Integer> VNODE_FIELD = field("vnode", Integer.class);
+    private static final Field<Object> FLOW_ID_FIELD = field("flow_id");
+    private static final Field<Object> WORKER_ID_FIELD = field("worker_id");
+    private static final Field<Object> VALUE_FIELD = field("value");
+    private static final String NEXT_EVALUATION_DATE_COLUMN = "next_evaluation_date";
+    private static final Field<Object> KEY_FIELD = DSL.field(DSL.quotedName("key"));
+    private final JdbcFilterService filterService;
 
-    protected io.kestra.jdbc.AbstractJdbcRepository<Trigger> jdbcRepository;
+    @Getter
+    private final Map<Triggers.Fields, String> fieldsMapping = Map.of(
+        Triggers.Fields.ID, KEY_FIELD.getName(),
+        Triggers.Fields.NAMESPACE, NAMESPACE_FIELD.getName(),
+        Triggers.Fields.FLOW_ID, FLOW_ID_FIELD.getName(),
+        Triggers.Fields.TRIGGER_ID, "trigger_id",
+        Triggers.Fields.EXECUTION_ID, "execution_id",
+        Triggers.Fields.NEXT_EXECUTION_DATE, NEXT_EVALUATION_DATE_COLUMN,
+        Triggers.Fields.WORKER_ID, WORKER_ID_FIELD.getName()
+    );
 
-    public AbstractJdbcTriggerRepository(io.kestra.jdbc.AbstractJdbcRepository<Trigger> jdbcRepository) {
-        this.jdbcRepository = jdbcRepository;
+    @Override
+    public Set<Triggers.Fields> dateFields() {
+        return Set.of(Triggers.Fields.NEXT_EXECUTION_DATE);
     }
 
     @Override
-    public Optional<Trigger> findLast(TriggerContext trigger) {
-        return this.jdbcRepository
-            .getDslContextWrapper()
-            .transactionResult(configuration -> {
-                SelectConditionStep<Record1<Object>> select = DSL
-                    .using(configuration)
-                    .select(field("value"))
-                    .from(this.jdbcRepository.getTable())
-                    .where(field("key").eq(trigger.uid()));
+    public Triggers.Fields dateFilterField() {
+        return Triggers.Fields.NEXT_EXECUTION_DATE;
+    }
 
-                return this.jdbcRepository.fetchOne(select);
-            });
+    public AbstractJdbcTriggerRepository(io.kestra.jdbc.AbstractJdbcRepository<TriggerState> jdbcRepository,
+        JdbcFilterService filterService) {
+        super(jdbcRepository);
+        this.filterService = filterService;
     }
 
     @Override
-    public Optional<Trigger> findByExecution(Execution execution) {
-        return this.jdbcRepository
-            .getDslContextWrapper()
-            .transactionResult(configuration -> {
-                SelectConditionStep<Record1<Object>> select = DSL
-                    .using(configuration)
-                    .select(field("value"))
-                    .from(this.jdbcRepository.getTable())
-                    .where(
-                        field("execution_id").eq(execution.getId())
-                    );
-
-                return this.jdbcRepository.fetchOne(select);
-            });
+    public Optional<TriggerState> findById(TriggerId trigger) {
+        return findOne(DSL.noCondition(), KEY_FIELD.eq(trigger.uid()));
     }
 
     @Override
-    public List<Trigger> findAll(String tenantId) {
+    public List<TriggerState> findAll(String tenantId) {
         return this.jdbcRepository
             .getDslContextWrapper()
-            .transactionResult(configuration -> {
+            .transactionResult(configuration ->
+            {
                 var select = DSL
                     .using(configuration)
-                    .select(field("value"))
+                    .select(VALUE_FIELD)
                     .from(this.jdbcRepository.getTable())
                     .where(this.defaultFilter(tenantId));
 
@@ -83,13 +96,14 @@ public abstract class AbstractJdbcTriggerRepository extends AbstractJdbcReposito
     }
 
     @Override
-    public List<Trigger> findAllForAllTenants() {
+    public List<TriggerState> findAllForAllTenants() {
         return this.jdbcRepository
             .getDslContextWrapper()
-            .transactionResult(configuration -> {
+            .transactionResult(configuration ->
+            {
                 SelectJoinStep<Record1<Object>> select = DSL
                     .using(configuration)
-                    .select(field("value"))
+                    .select(VALUE_FIELD)
                     .from(this.jdbcRepository.getTable());
 
                 return this.jdbcRepository.fetch(select);
@@ -97,85 +111,14 @@ public abstract class AbstractJdbcTriggerRepository extends AbstractJdbcReposito
     }
 
     @Override
-    public int count(@Nullable String tenantId) {
+    public TriggerState create(TriggerState trigger) {
         return this.jdbcRepository
             .getDslContextWrapper()
-            .transactionResult(configuration -> DSL
-                .using(configuration)
-                .selectCount()
-                .from(this.jdbcRepository.getTable())
-                .where(this.defaultFilter(tenantId))
-                .fetchOne(0, int.class));
-    }
-
-    @Override
-    public int countForNamespace(@Nullable String tenantId, @Nullable String namespace) {
-        if (namespace == null) return count(tenantId);
-
-        return this.jdbcRepository
-            .getDslContextWrapper()
-            .transactionResult(configuration -> DSL
-                .using(configuration)
-                .selectCount()
-                .from(this.jdbcRepository.getTable())
-                .where(this.defaultFilter(tenantId))
-                .and(DSL.or(
-                    NAMESPACE_FIELD.likeIgnoreCase(namespace + ".%"),
-                    NAMESPACE_FIELD.eq(namespace)
-                ))
-                .fetchOne(0, int.class));
-    }
-
-    public List<Trigger> findByNextExecutionDateReadyForAllTenants(ZonedDateTime now, ScheduleContextInterface scheduleContextInterface) {
-        JdbcSchedulerContext jdbcSchedulerContext = (JdbcSchedulerContext) scheduleContextInterface;
-
-        return jdbcSchedulerContext.getContext()
-            .select(field("value"))
-            .from(this.jdbcRepository.getTable())
-            .where(
-                field("next_execution_date").lessThan(now.toOffsetDateTime())
-                    // we check for null for backwards compatibility
-                    .or(field("next_execution_date").isNull())
-            )
-            .orderBy(field("next_execution_date").asc())
-            .forUpdate()
-            .skipLocked()
-            .fetch()
-            .map(r -> this.jdbcRepository.deserialize(r.get("value", String.class)));
-    }
-
-    public Trigger save(Trigger trigger, ScheduleContextInterface scheduleContextInterface) {
-        JdbcSchedulerContext jdbcSchedulerContext = (JdbcSchedulerContext) scheduleContextInterface;
-
-        Map<Field<Object>, Object> fields = this.jdbcRepository.persistFields(trigger);
-        this.jdbcRepository.persist(trigger, jdbcSchedulerContext.getContext(), fields);
-
-        return trigger;
-    }
-
-    @Override
-    public Trigger save(Trigger trigger) {
-        Map<Field<Object>, Object> fields = this.jdbcRepository.persistFields(trigger);
-        this.jdbcRepository.persist(trigger, fields);
-
-        return trigger;
-    }
-
-    @Override
-    public Trigger save(DSLContext dslContext, Trigger trigger) {
-        Map<Field<Object>, Object> fields = this.jdbcRepository.persistFields(trigger);
-        this.jdbcRepository.persist(trigger, dslContext, fields);
-
-        return trigger;
-    }
-
-    public Trigger create(Trigger trigger) {
-        return this.jdbcRepository
-            .getDslContextWrapper()
-            .transactionResult(configuration -> {
+            .transactionResult(configuration ->
+            {
                 DSL.using(configuration)
                     .insertInto(this.jdbcRepository.getTable())
-                    .set(AbstractJdbcRepository.field("key"), this.jdbcRepository.key(trigger))
+                    .set(KEY_FIELD, trigger.uid())
                     .set(this.jdbcRepository.persistFields(trigger))
                     .execute();
 
@@ -184,174 +127,66 @@ public abstract class AbstractJdbcTriggerRepository extends AbstractJdbcReposito
     }
 
     @Override
-    public void delete(Trigger trigger) {
-        this.jdbcRepository.delete(trigger);
-    }
-
-    @Override
-    public Trigger update(Trigger trigger) {
-        return this.jdbcRepository
+    public void delete(TriggerId trigger) {
+        this.jdbcRepository
             .getDslContextWrapper()
-            .transactionResult(configuration -> {
+            .transaction(configuration ->
+            {
                 DSL.using(configuration)
-                    .update(this.jdbcRepository.getTable())
-                    .set(this.jdbcRepository.persistFields((trigger)))
-                    .where(field("key").eq(trigger.uid()))
+                    .delete(this.jdbcRepository.getTable())
+                    .where(KEY_FIELD.eq(trigger.uid()))
                     .execute();
-
-                return trigger;
-            });
-    }
-
-    // Allow to update a trigger from a flow & an abstract trigger
-    // using forUpdate to avoid the lastTrigger to be updated by another thread
-    // before doing the update
-    public Trigger update(Flow flow, AbstractTrigger abstractTrigger, ConditionContext conditionContext) {
-        return this.jdbcRepository
-            .getDslContextWrapper()
-            .transactionResult(configuration -> {
-                Optional<Trigger> lastTrigger = this.jdbcRepository.fetchOne(DSL
-                    .using(configuration)
-                    .select(field("value"))
-                    .from(this.jdbcRepository.getTable())
-                    .where(field("key").eq(Trigger.uid(flow, abstractTrigger)))
-                    .forUpdate()
-                );
-
-                Trigger updatedTrigger = Trigger.of(flow, abstractTrigger, conditionContext, lastTrigger);
-
-                DSL.using(configuration)
-                    .update(this.jdbcRepository.getTable())
-                    .set(this.jdbcRepository.persistFields(updatedTrigger))
-                    .where(field("key").eq(updatedTrigger.uid()))
-                    .execute();
-
-                return updatedTrigger;
             });
     }
 
     @Override
-    public Trigger lock(String triggerUid, Function<Trigger, Trigger> function) {
-        return this.jdbcRepository
-            .getDslContextWrapper()
-            .transactionResult(configuration -> {
-                DSLContext context = DSL.using(configuration);
-                Optional<Trigger> optionalTrigger = this.jdbcRepository.fetchOne(context.select(field("value"))
-                    .from(this.jdbcRepository.getTable())
-                    .where(
-                        field("key").eq(triggerUid)
-                    ).forUpdate());
-
-                if (optionalTrigger.isPresent()) {
-                    Trigger trigger = function.apply(optionalTrigger.get());
-
-                    this.save(context, trigger);
-                    return trigger;
-                }
-
-                return null;
-            });
-    }
-    @Override
-    public ArrayListTotal<Trigger> find(Pageable pageable,String tenantId, List<QueryFilter> filters) {
-        return this.jdbcRepository
-            .getDslContextWrapper()
-            .transactionResult(configuration -> {
-                DSLContext context = DSL.using(configuration);
-                // extract Query field from the filters list
-                String query = getQuery(filters);
-
-                // Base query with table and DSL fields
-                SelectConditionStep<?> select = context
-                    .select(field("value"))
-                    .hint(context.configuration().dialect().supports(SQLDialect.MYSQL) ? "SQL_CALC_FOUND_ROWS" : null)
-                    .from(this.jdbcRepository.getTable())
-                    .where(this.defaultFilter(tenantId))
-                    .and(this.fullTextCondition(query));
-
-                filter(select, filters, "next_execution_date");
-                // Return paginated results
-                return this.jdbcRepository.fetchPage(context, select, pageable);
-            });
+    public ArrayListTotal<TriggerState> find(Pageable pageable, String tenantId, List<QueryFilter> filters) {
+        var condition = filter(filters, NEXT_EVALUATION_DATE_COLUMN, Resource.TRIGGER);
+        return findPage(pageable, tenantId, condition);
     }
 
     @Override
-    public ArrayListTotal<Trigger> find(Pageable pageable, String query, String tenantId, String namespace, String flowId, String workerId) {
-        return this.jdbcRepository
-            .getDslContextWrapper()
-            .transactionResult(configuration -> {
-                DSLContext context = DSL.using(configuration);
+    public ArrayListTotal<TriggerState> find(Pageable pageable, String query, String tenantId, String namespace, String flowId, String workerId) {
+        var condition = this.fullTextCondition(query).and(this.defaultFilter());
 
-                SelectConditionStep<Record1<Object>> select = context
-                    .select(field("value"))
-                    .hint(context.configuration().dialect().supports(SQLDialect.MYSQL) ? "SQL_CALC_FOUND_ROWS" : null)
-                    .from(this.jdbcRepository.getTable())
-                    .where(this.fullTextCondition(query))
-                    .and(this.defaultFilter(tenantId));
+        if (namespace != null) {
+            condition = condition.and(DSL.or(NAMESPACE_FIELD.eq(namespace), NAMESPACE_FIELD.startsWith(namespace + ".")));
+        }
 
-                if (namespace != null) {
-                    select.and(DSL.or(NAMESPACE_FIELD.eq(namespace), NAMESPACE_FIELD.likeIgnoreCase(namespace + ".%")));
-                }
+        if (flowId != null) {
+            condition = condition.and(FLOW_ID_FIELD.eq(flowId));
+        }
 
-                if (flowId != null) {
-                    select.and(field("flow_id").eq(flowId));
-                }
+        if (workerId != null) {
+            condition = condition.and(WORKER_ID_FIELD.eq(workerId));
+        }
 
-                if (workerId != null) {
-                    select.and(field("worker_id").eq(workerId));
-                }
-                select.and(this.defaultFilter());
-
-                return this.jdbcRepository.fetchPage(context, select, pageable);
-            });
+        return findPage(pageable, tenantId, condition);
     }
 
-    /** {@inheritDoc} */
     @Override
-    public Flux<Trigger> find(String query, String tenantId, String namespace) {
-        return Flux.create(
-            emitter -> this.jdbcRepository
-                .getDslContextWrapper()
-                .transaction(configuration -> {
-                    DSLContext context = DSL.using(configuration);
-
-                    var select = context
-                        .select(
-                            field("value")
-                        )
-                        .hint(context.configuration().dialect().supports(SQLDialect.MYSQL) ? "SQL_CALC_FOUND_ROWS" : null)
-                        .from(this.jdbcRepository.getTable())
-                        .where(this.defaultFilter(tenantId));
-                    if (namespace != null) {
-                        select =  select.and(DSL.or(NAMESPACE_FIELD.eq(namespace), NAMESPACE_FIELD.likeIgnoreCase(namespace + ".%")));
-                    }
-                    if (query != null) {
-                        select = select.and(this.fullTextCondition(query));
-                    }
-
-                    select.fetch()
-                    .map(this.jdbcRepository::map)
-                    .forEach(emitter::next);
-
-                    emitter.complete();
-
-                }),
-            FluxSink.OverflowStrategy.BUFFER
-        );
-
+    public Flux<TriggerState> find(String tenantId, List<QueryFilter> filters) {
+        var condition = filter(filters, NEXT_EVALUATION_DATE_COLUMN, Resource.TRIGGER);
+        return findAsync(tenantId, condition);
     }
 
     protected Condition fullTextCondition(String query) {
-        return query == null ? DSL.trueCondition() : jdbcRepository.fullTextCondition(List.of("fulltext"), query);
+        return query == null ? DSL.noCondition() : jdbcRepository.fullTextCondition(List.of("fulltext"), query);
     }
 
+    @Override
+    protected Condition findQueryCondition(String query) {
+        return fullTextCondition(query);
+    }
+
+    @Override
     protected Condition defaultFilter(String tenantId, boolean allowDeleted) {
         return buildTenantCondition(tenantId);
     }
 
     @Override
     protected Condition defaultFilter() {
-        return DSL.trueCondition();
+        return DSL.noCondition();
     }
 
     @Override
@@ -360,9 +195,168 @@ public abstract class AbstractJdbcTriggerRepository extends AbstractJdbcReposito
             "flowId", "flow_id",
             "triggerId", "trigger_id",
             "executionId", "execution_id",
-            "nextExecutionDate", "next_execution_date"
+            "nextExecutionDate", NEXT_EVALUATION_DATE_COLUMN
         );
 
         return s -> mapper.getOrDefault(s, s);
+    }
+
+    @Override
+    public ArrayListTotal<Map<String, Object>> fetchData(
+        String tenantId,
+        DataFilter<Triggers.Fields, ? extends ColumnDescriptor<Triggers.Fields>> descriptors,
+        ZonedDateTime startDate,
+        ZonedDateTime endDate,
+        Pageable pageable) {
+        return this.jdbcRepository
+            .getDslContextWrapper()
+            .transactionResult(configuration ->
+            {
+                DSLContext context = DSL.using(configuration);
+
+                Map<String, ? extends ColumnDescriptor<Triggers.Fields>> columnsWithoutDate = descriptors.getColumns().entrySet().stream()
+                    .filter(entry -> entry.getValue().getField() == null || !dateFields().contains(entry.getValue().getField()))
+                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+
+                boolean hasAgg = descriptors.getColumns().entrySet().stream().anyMatch(col -> col.getValue().getAgg() != null);
+                // Generate custom fields for date as they probably need formatting
+                // If they don't have aggs, we format datetime to minutes
+                List<Field<Date>> dateFields = generateDateFields(descriptors, fieldsMapping, startDate, endDate, dateFields(), hasAgg ? null : DateUtils.GroupType.MINUTE);
+
+                // Init request
+                SelectConditionStep<Record> selectConditionStep = select(
+                    context,
+                    filterService,
+                    columnsWithoutDate,
+                    dateFields,
+                    this.getFieldsMapping(),
+                    this.jdbcRepository.getTable(),
+                    tenantId
+                );
+
+                // Apply Where filter
+                selectConditionStep = where(selectConditionStep, filterService, descriptors.getWhere(), fieldsMapping);
+
+                List<? extends ColumnDescriptor<Triggers.Fields>> columnsWithoutDateWithOutAggs = columnsWithoutDate.values().stream()
+                    .filter(column -> column.getAgg() == null)
+                    .toList();
+
+                // Apply GroupBy for aggregation
+                SelectHavingStep<Record> selectHavingStep = groupBy(
+                    selectConditionStep,
+                    columnsWithoutDateWithOutAggs,
+                    dateFields,
+                    fieldsMapping
+                );
+
+                // Apply OrderBy
+                SelectSeekStepN<Record> selectSeekStep = orderBy(selectHavingStep, descriptors);
+
+                // Fetch and paginate if provided
+                return fetchSeekStep(selectSeekStep, pageable);
+            });
+    }
+
+    @Override
+    public Double fetchValue(String tenantId, DataFilterKPI<ITriggers.Fields, ? extends ColumnDescriptor<ITriggers.Fields>> dataFilter, ZonedDateTime startDate, ZonedDateTime endDate,
+        boolean numeratorFilter) {
+        return this.jdbcRepository.getDslContextWrapper().transactionResult(configuration ->
+        {
+            DSLContext context = DSL.using(configuration);
+            ColumnDescriptor<ITriggers.Fields> columnDescriptor = dataFilter.getColumns();
+            Field<?> field = columnToField(columnDescriptor, getFieldsMapping());
+            if (columnDescriptor.getAgg() != null) {
+                field = filterService.buildAggregation(field, columnDescriptor.getAgg());
+            }
+
+            List<AbstractFilter<ITriggers.Fields>> filters = new ArrayList<>(ListUtils.emptyOnNull(dataFilter.getWhere()));
+            if (numeratorFilter) {
+                filters.addAll(dataFilter.getNumerator());
+            }
+
+            SelectConditionStep selectStep = context
+                .select(field)
+                .from(this.jdbcRepository.getTable())
+                .where(this.defaultFilter(tenantId));
+
+            var selectConditionStep = where(
+                selectStep,
+                filterService,
+                filters,
+                getFieldsMapping()
+            );
+
+            Record result = selectConditionStep.fetchOne();
+            if (result != null) {
+                return result.getValue(field, Double.class);
+            } else {
+                return null;
+            }
+        });
+    }
+
+    /**
+     * {@inheritDoc}
+     **/
+    @Override
+    public List<TriggerState> findAllForVNodes(Set<Integer> vNodes) {
+        return this.jdbcRepository
+            .getDslContextWrapper()
+            .transactionResult(
+                configuration -> DSL.using(configuration)
+                    .select(VALUE_FIELD)
+                    .from(this.jdbcRepository.getTable())
+                    .where(VNODE_FIELD.in(vNodes))
+                    .fetch()
+            )
+            .map(r -> this.jdbcRepository.deserialize(r.get("value", String.class)));
+    }
+
+    /**
+     * {@inheritDoc}
+     **/
+    @Override
+    public List<TriggerState> findTriggersEligibleForScheduling(ZonedDateTime now, Set<Integer> vNodes, boolean locked) {
+        final long epochMilli = now.toInstant().toEpochMilli();
+        return this.jdbcRepository
+            .getDslContextWrapper()
+            .transactionResult(
+                configuration -> DSL.using(configuration)
+                    .select(VALUE_FIELD)
+                    .from(this.jdbcRepository.getTable())
+                    .where(NEXT_EVALUATION_EPOCH_FIELD.le(epochMilli).or(NEXT_EVALUATION_EPOCH_FIELD.isNull()))
+                    .and(LOCKED_FIELD.isNull().or(LOCKED_FIELD.eq(locked)))
+                    .and(VNODE_FIELD.in(vNodes))
+                    .orderBy(NEXT_EVALUATION_EPOCH_FIELD.asc())
+                    .fetch()
+            )
+            .map(r -> this.jdbcRepository.deserialize(r.get("value", String.class)));
+    }
+
+    @Override
+    abstract protected Field<Date> formatDateField(String dateField, DateUtils.GroupType groupType);
+
+    @SuppressWarnings("removal")
+    @Override
+    public List<Trigger> findAllForAllTenantsV1() {
+        return this.jdbcRepository
+            .getDslContextWrapper()
+            .transactionResult(configuration ->
+            {
+                SelectJoinStep<Record1<Object>> select = DSL
+                    .using(configuration)
+                    .select(VALUE_FIELD)
+                    .from(this.jdbcRepository.getTable());
+
+                return select.fetch().map(record ->
+                {
+                    String json = record.get("value", String.class);
+                    try {
+                        return JdbcMapper.of().readValue(json, Trigger.class);
+                    } catch (IOException e) {
+                        throw new DeserializationException(e, json);
+                    }
+                });
+            });
     }
 }

@@ -1,55 +1,74 @@
 package io.kestra.core.runners;
 
+import java.io.*;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.util.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
+
+import org.junit.jupiter.api.Test;
+
 import com.google.common.collect.ImmutableMap;
 import com.google.common.io.CharStreams;
+
+import io.kestra.core.exceptions.InputOutputValidationException;
+import io.kestra.core.exceptions.InternalException;
 import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.junit.annotations.LoadFlows;
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.executions.LogEntry;
 import io.kestra.core.models.flows.Flow;
 import io.kestra.core.models.flows.State;
+import io.kestra.core.models.tasks.common.EncryptedString;
+import io.kestra.core.queues.DispatchQueueInterface;
 import io.kestra.core.queues.QueueException;
-import io.kestra.core.queues.QueueFactoryInterface;
-import io.kestra.core.queues.QueueInterface;
 import io.kestra.core.repositories.FlowRepositoryInterface;
+import io.kestra.core.services.TaskOutputService;
+import io.kestra.core.storages.Namespace;
+import io.kestra.core.storages.NamespaceFactory;
 import io.kestra.core.storages.StorageInterface;
-import io.kestra.core.utils.TestsUtils;
+
 import jakarta.inject.Inject;
-import jakarta.inject.Named;
-import org.junit.jupiter.api.Test;
 
-import jakarta.validation.ConstraintViolationException;
-import org.junitpioneer.jupiter.RetryingTest;
-import reactor.core.publisher.Flux;
-
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.LocalDate;
-import java.time.LocalTime;
-import java.util.*;
-import java.util.concurrent.TimeoutException;
-
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.*;
+import static io.kestra.core.tenant.TenantService.MAIN_TENANT;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @KestraTest(startRunner = true)
 public class InputsTest {
     @Inject
-    @Named(QueueFactoryInterface.WORKERTASKLOG_NAMED)
-    private QueueInterface<LogEntry> logQueue;
+    private DispatchQueueInterface<LogEntry> logQueue;
 
     @Inject
-    private RunnerUtils runnerUtils;
+    private TestRunnerUtils runnerUtils;
 
-    public static Map<String, Object> inputs = ImmutableMap.<String, Object>builder()
+    @Inject
+    private NamespaceFactory namespaceFactory;
+
+    private static final Map<String, Object> object = Map.of(
+        "people", List.of(
+            Map.of(
+                "first", "Mustafa",
+                "last", "Tarek"
+            ),
+            Map.of(
+                "first", "Ahmed",
+                "last", "Tarek"
+            )
+        )
+    );
+    public static Map<String, Object> inputs = ImmutableMap.<String, Object> builder()
         .put("string", "myString")
-        .put("enum", "ENUM_VALUE")
         .put("int", "42")
         .put("float", "42.42")
         .put("bool", "false")
@@ -58,7 +77,6 @@ public class InputsTest {
         .put("time", "18:27:49")
         .put("duration", "PT5M6S")
         .put("file", Objects.requireNonNull(InputsTest.class.getClassLoader().getResource("application-test.yml")).getPath())
-        .put("json", "{\"a\": \"b\"}")
         .put("uri", "https://www.google.com")
         .put("nested.string", "a string")
         .put("nested.more.int", "123")
@@ -72,11 +90,14 @@ public class InputsTest {
         .put("validatedTime", "11:27:49")
         .put("secret", "secret")
         .put("array", "[1, 2, 3]")
-        .put("yaml", """
+        .put("json1", "{\"a\": \"b\"}")
+        .put("json2", object)
+        .put("yaml1", """
             some: property
             alist:
             - of
             - values""")
+        .put("yaml2", object)
         .build();
 
     @Inject
@@ -88,8 +109,14 @@ public class InputsTest {
     @Inject
     private FlowInputOutput flowIO;
 
-    private Map<String, Object> typedInputs(Map<String, Object> map) {
-        return typedInputs(map, flowRepository.findById(null, "io.kestra.tests", "inputs").get());
+    @Inject
+    private FlowInputOutput flowInputOutput;
+
+    @Inject
+    private TaskOutputService taskOutputService;
+
+    private Map<String, Object> typedInputs(Map<String, Object> map, String tenantId) {
+        return typedInputs(map, flowRepository.findById(tenantId, "io.kestra.tests", "inputs").get());
     }
 
     private Map<String, Object> typedInputs(Map<String, Object> map, Flow flow) {
@@ -98,6 +125,7 @@ public class InputsTest {
             Execution.builder()
                 .id("test")
                 .namespace(flow.getNamespace())
+                .tenantId(flow.getTenantId())
                 .flowRevision(1)
                 .flowId(flow.getId())
                 .build(),
@@ -106,299 +134,397 @@ public class InputsTest {
     }
 
     @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
+    @LoadFlows({ "flows/valids/inputs.yaml" })
     void missingRequired() {
         HashMap<String, Object> inputs = new HashMap<>(InputsTest.inputs);
         inputs.put("string", null);
-        ConstraintViolationException e = assertThrows(ConstraintViolationException.class, () -> typedInputs(inputs));
-        assertThat(e.getMessage(), containsString("Invalid input for `string`, missing required input, but received `null`"));
+        InputOutputValidationException e = assertThrows(InputOutputValidationException.class, () -> typedInputs(inputs, MAIN_TENANT));
+        assertThat(e.getMessage()).contains("Missing required input:string");
     }
 
     @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant")
     void nonRequiredNoDefaultNoValueIsNull() {
         HashMap<String, Object> inputsWithMissingOptionalInput = new HashMap<>(inputs);
         inputsWithMissingOptionalInput.remove("bool");
 
-        assertThat(typedInputs(inputsWithMissingOptionalInput).containsKey("bool"), is(true));
-        assertThat(typedInputs(inputsWithMissingOptionalInput).get("bool"), nullValue());
+        assertThat(typedInputs(inputsWithMissingOptionalInput, "tenant").containsKey("bool")).isTrue();
+        assertThat(typedInputs(inputsWithMissingOptionalInput, "tenant").get("bool")).isNull();
     }
 
     @SuppressWarnings("unchecked")
     @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant1")
     void allValidInputs() throws URISyntaxException, IOException {
-        Map<String, Object> typeds = typedInputs(inputs);
-
-        assertThat(typeds.get("string"), is("myString"));
-        assertThat(typeds.get("int"), is(42));
-        assertThat(typeds.get("float"), is(42.42F));
-        assertThat(typeds.get("bool"), is(false));
-        assertThat(typeds.get("instant"), is(Instant.parse("2019-10-06T18:27:49Z")));
-        assertThat(typeds.get("instantDefaults"), is(Instant.parse("2013-08-09T14:19:00Z")));
-        assertThat(typeds.get("date"), is(LocalDate.parse("2019-10-06")));
-        assertThat(typeds.get("time"), is(LocalTime.parse("18:27:49")));
-        assertThat(typeds.get("duration"), is(Duration.parse("PT5M6S")));
-        assertThat((URI) typeds.get("file"), is(new URI("kestra:///io/kestra/tests/inputs/executions/test/inputs/file/application-test.yml")));
-        assertThat(
-            CharStreams.toString(new InputStreamReader(storageInterface.get(null, null, (URI) typeds.get("file")))),
-            is(CharStreams.toString(new InputStreamReader(new FileInputStream((String) inputs.get("file")))))
+        Map<String, Object> typeds = typedInputs(inputs, "tenant1");
+        EncryptedString encrypted = (EncryptedString) typeds.get("secret");
+        assertThat(typeds.get("string")).isEqualTo("myString");
+        assertThat(typeds.get("int")).isEqualTo(42);
+        assertThat(typeds.get("float")).isEqualTo(42.42F);
+        assertThat((Boolean) typeds.get("bool")).isFalse();
+        assertThat(typeds.get("instant")).isEqualTo(Instant.parse("2019-10-06T18:27:49Z"));
+        assertThat(typeds.get("instantDefaults")).isEqualTo(Instant.parse("2013-08-09T14:19:00Z"));
+        assertThat(typeds.get("date")).isEqualTo(LocalDate.parse("2019-10-06"));
+        assertThat(typeds.get("time")).isEqualTo(LocalTime.parse("18:27:49"));
+        assertThat(typeds.get("duration")).isEqualTo(Duration.parse("PT5M6S"));
+        assertThat((URI) typeds.get("file")).isEqualTo(new URI("kestra:///io/kestra/tests/inputs/executions/test/inputs/file/application-test.yml"));
+        assertThat(CharStreams.toString(new InputStreamReader(storageInterface.get("tenant1", null, (URI) typeds.get("file")))))
+            .isEqualTo(CharStreams.toString(new InputStreamReader(new FileInputStream((String) inputs.get("file")))));
+        assertThat(typeds.get("uri")).isEqualTo("https://www.google.com");
+        assertThat(((Map<String, Object>) typeds.get("nested")).get("string")).isEqualTo("a string");
+        assertThat((Boolean) ((Map<String, Object>) typeds.get("nested")).get("bool")).isTrue();
+        assertThat(((Map<String, Object>) ((Map<String, Object>) typeds.get("nested")).get("more")).get("int")).isEqualTo(123);
+        assertThat(typeds.get("validatedString")).isEqualTo("A123");
+        assertThat(typeds.get("validatedInt")).isEqualTo(12);
+        assertThat(typeds.get("validatedDate")).isEqualTo(LocalDate.parse("2023-01-02"));
+        assertThat(typeds.get("validatedDateTime")).isEqualTo(Instant.parse("2023-01-01T00:00:10Z"));
+        assertThat(typeds.get("validatedDuration")).isEqualTo(Duration.parse("PT15S"));
+        assertThat(typeds.get("validatedFloat")).isEqualTo(0.42F);
+        assertThat(typeds.get("validatedTime")).isEqualTo(LocalTime.parse("11:27:49"));
+        assertThat(encrypted.getType()).isEqualTo(EncryptedString.TYPE);
+        assertThat(encrypted.getValue()).isNotEqualTo("secret"); // secret should be encrypted
+        assertThat(typeds.get("array")).isInstanceOf(List.class);
+        assertThat((List<Integer>) typeds.get("array")).hasSize(3);
+        assertThat((List<Integer>) typeds.get("array")).isEqualTo(List.of(1, 2, 3));
+        assertThat(typeds.get("json1")).isEqualTo(Map.of("a", "b"));
+        assertThat(typeds.get("json2")).isEqualTo(object);
+        assertThat(typeds.get("yaml1")).isEqualTo(
+            Map.of(
+                "some", "property",
+                "alist", List.of("of", "values")
+            )
         );
-        assertThat(typeds.get("json"), is(Map.of("a", "b")));
-        assertThat(typeds.get("uri"), is("https://www.google.com"));
-        assertThat(((Map<String, Object>)typeds.get("nested")).get("string"), is("a string"));
-        assertThat(((Map<String, Object>)typeds.get("nested")).get("bool"), is(true));
-        assertThat(((Map<String, Object>)((Map<String, Object>)typeds.get("nested")).get("more")).get("int"), is(123));
-        assertThat(typeds.get("validatedString"), is("A123"));
-        assertThat(typeds.get("validatedInt"), is(12));
-        assertThat(typeds.get("validatedDate"), is(LocalDate.parse("2023-01-02")));
-        assertThat(typeds.get("validatedDateTime"), is(Instant.parse("2023-01-01T00:00:10Z")));
-        assertThat(typeds.get("validatedDuration"), is(Duration.parse("PT15S")));
-        assertThat(typeds.get("validatedFloat"), is(0.42F));
-        assertThat(typeds.get("validatedTime"), is(LocalTime.parse("11:27:49")));
-        assertThat(typeds.get("secret"), not("secret")); // secret inputs are encrypted
-        assertThat(typeds.get("array"), instanceOf(List.class));
-        assertThat((List<String>)typeds.get("array"), hasSize(3));
-        assertThat((List<String>)typeds.get("array"), contains(1, 2, 3));
-        assertThat(typeds.get("yaml"), is(Map.of(
-            "some", "property",
-            "alist", List.of("of", "values"))));
+        assertThat(typeds.get("yaml2")).isEqualTo(object);
     }
 
     @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant2")
     void allValidTypedInputs() {
-        Map<String, Object> typeds = typedInputs(inputs);
+        Map<String, Object> typeds = typedInputs(inputs, "tenant2");
         typeds.put("int", 42);
         typeds.put("float", 42.42F);
         typeds.put("bool", false);
 
-        assertThat(typeds.get("string"), is("myString"));
-        assertThat(typeds.get("enum"), is("ENUM_VALUE"));
-        assertThat(typeds.get("int"), is(42));
-        assertThat(typeds.get("float"), is(42.42F));
-        assertThat(typeds.get("bool"), is(false));
+        assertThat(typeds.get("string")).isEqualTo("myString");
+        assertThat(typeds.get("int")).isEqualTo(42);
+        assertThat(typeds.get("float")).isEqualTo(42.42F);
+        assertThat((Boolean) typeds.get("bool")).isFalse();
     }
 
     @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
-    void inputFlow() throws TimeoutException, QueueException {
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant3")
+    void inputFlow() throws TimeoutException, QueueException, io.kestra.core.exceptions.InternalException {
         Execution execution = runnerUtils.runOne(
-            null,
+            "tenant3",
             "io.kestra.tests",
             "inputs",
             null,
             (flow, execution1) -> flowIO.readExecutionInputs(flow, execution1, inputs)
         );
 
-        assertThat(execution.getTaskRunList(), hasSize(14));
-        assertThat(execution.getState().getCurrent(), is(State.Type.SUCCESS));
-        assertThat(
-            (String) execution.findTaskRunsByTaskId("file").getFirst().getOutputs().get("value"),
-            matchesRegex("kestra:///io/kestra/tests/inputs/executions/.*/inputs/file/application-test.yml")
-        );
+        assertThat(execution.getTaskRunList()).hasSize(16);
+        assertThat(execution.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
+        assertThat((String) taskOutputService.getOutputs(execution.findTaskRunsByTaskId("file").getFirst()).get("value"))
+            .matches("kestra:///io/kestra/tests/inputs/executions/.*/inputs/file/application-test.yml");
         // secret inputs are decrypted to be used as task properties
-        assertThat(
-            (String) execution.findTaskRunsByTaskId("secret").getFirst().getOutputs().get("value"),
-            is("secret")
-        );
+        assertThat((String) taskOutputService.getOutputs(execution.findTaskRunsByTaskId("secret").getFirst()).get("value")).isEqualTo("secret");
         // null inputs are serialized
-        assertThat(
-            (String) execution.findTaskRunsByTaskId("optional").getFirst().getOutputs().get("value"),
-            emptyString()
-        );
+        assertThat((String) taskOutputService.getOutputs(execution.findTaskRunsByTaskId("optional").getFirst()).get("value")).isEmpty();
     }
 
     @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant4")
     void inputValidatedStringBadValue() {
         HashMap<String, Object> map = new HashMap<>(inputs);
         map.put("validatedString", "foo");
 
-        ConstraintViolationException e = assertThrows(ConstraintViolationException.class, () -> typedInputs(map));
+        InputOutputValidationException e = assertThrows(InputOutputValidationException.class, () -> typedInputs(map, "tenant4"));
 
-        assertThat(e.getMessage(), containsString("Invalid input for `validatedString`, it must match the pattern"));
+        assertThat(e.getMessage()).contains("Invalid value for input `validatedString`. Cause: it must match the pattern");
     }
 
     @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant5")
     void inputValidatedIntegerBadValue() {
         HashMap<String, Object> mapMin = new HashMap<>(inputs);
         mapMin.put("validatedInt", "9");
-        ConstraintViolationException e = assertThrows(ConstraintViolationException.class, () -> typedInputs(mapMin));
-        assertThat(e.getMessage(), containsString("Invalid input for `validatedInt`, it must be more than `10`, but received `9`"));
+        InputOutputValidationException e = assertThrows(InputOutputValidationException.class, () -> typedInputs(mapMin, "tenant5"));
+        assertThat(e.getMessage()).contains("Invalid value for input `validatedInt`. Cause: it must be more than `10`");
 
         HashMap<String, Object> mapMax = new HashMap<>(inputs);
         mapMax.put("validatedInt", "21");
 
-        e = assertThrows(ConstraintViolationException.class, () -> typedInputs(mapMax));
+        e = assertThrows(InputOutputValidationException.class, () -> typedInputs(mapMax, "tenant5"));
 
-        assertThat(e.getMessage(), containsString("Invalid input for `validatedInt`, it must be less than `20`, but received `21`"));
+        assertThat(e.getMessage()).contains("Invalid value for input `validatedInt`. Cause: it must be less than `20`");
     }
 
     @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant6")
     void inputValidatedDateBadValue() {
         HashMap<String, Object> mapMin = new HashMap<>(inputs);
         mapMin.put("validatedDate", "2022-01-01");
-        ConstraintViolationException e = assertThrows(ConstraintViolationException.class, () -> typedInputs(mapMin));
-        assertThat(e.getMessage(), containsString("Invalid input for `validatedDate`, it must be after `2023-01-01`, but received `2022-01-01`"));
+        InputOutputValidationException e = assertThrows(InputOutputValidationException.class, () -> typedInputs(mapMin, "tenant6"));
+        assertThat(e.getMessage()).contains("Invalid value for input `validatedDate`. Cause: it must be after `2023-01-01`");
 
         HashMap<String, Object> mapMax = new HashMap<>(inputs);
         mapMax.put("validatedDate", "2024-01-01");
 
-        e = assertThrows(ConstraintViolationException.class, () -> typedInputs(mapMax));
+        e = assertThrows(InputOutputValidationException.class, () -> typedInputs(mapMax, "tenant6"));
 
-        assertThat(e.getMessage(), containsString("Invalid input for `validatedDate`, it must be before `2023-12-31`, but received `2024-01-01`"));
+        assertThat(e.getMessage()).contains("Invalid value for input `validatedDate`. Cause: it must be before `2023-12-31`");
     }
 
     @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant7")
     void inputValidatedDateTimeBadValue() {
         HashMap<String, Object> mapMin = new HashMap<>(inputs);
         mapMin.put("validatedDateTime", "2022-01-01T00:00:00Z");
-        ConstraintViolationException e = assertThrows(ConstraintViolationException.class, () -> typedInputs(mapMin));
-        assertThat(e.getMessage(), containsString("Invalid input for `validatedDateTime`, it must be after `2023-01-01T00:00:00Z`, but received `2022-01-01T00:00:00Z`"));
+        InputOutputValidationException e = assertThrows(InputOutputValidationException.class, () -> typedInputs(mapMin, "tenant7"));
+        assertThat(e.getMessage()).contains("Invalid value for input `validatedDateTime`. Cause: it must be after `2023-01-01T00:00:00Z`");
 
         HashMap<String, Object> mapMax = new HashMap<>(inputs);
         mapMax.put("validatedDateTime", "2024-01-01T00:00:00Z");
 
-        e = assertThrows(ConstraintViolationException.class, () -> typedInputs(mapMax));
+        e = assertThrows(InputOutputValidationException.class, () -> typedInputs(mapMax, "tenant7"));
 
-        assertThat(e.getMessage(), containsString("Invalid input for `validatedDateTime`, it must be before `2023-12-31T23:59:59Z`"));
+        assertThat(e.getMessage()).contains("Invalid value for input `validatedDateTime`. Cause: it must be before `2023-12-31T23:59:59Z`");
     }
 
     @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant8")
     void inputValidatedDurationBadValue() {
         HashMap<String, Object> mapMin = new HashMap<>(inputs);
         mapMin.put("validatedDuration", "PT1S");
-        ConstraintViolationException e = assertThrows(ConstraintViolationException.class, () -> typedInputs(mapMin));
-        assertThat(e.getMessage(), containsString("Invalid input for `validatedDuration`, It must be more than `PT10S`, but received `PT1S`"));
+        InputOutputValidationException e = assertThrows(InputOutputValidationException.class, () -> typedInputs(mapMin, "tenant8"));
+        assertThat(e.getMessage()).contains("Invalid value for input `validatedDuration`. Cause: It must be more than `PT10S`");
 
         HashMap<String, Object> mapMax = new HashMap<>(inputs);
         mapMax.put("validatedDuration", "PT30S");
 
-        e = assertThrows(ConstraintViolationException.class, () -> typedInputs(mapMax));
+        e = assertThrows(InputOutputValidationException.class, () -> typedInputs(mapMax, "tenant8"));
 
-        assertThat(e.getMessage(), containsString("Invalid input for `validatedDuration`, It must be less than `PT20S`, but received `PT30S`"));
+        assertThat(e.getMessage()).contains("Invalid value for input `validatedDuration`. Cause: It must be less than `PT20S`");
     }
 
     @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant9")
     void inputValidatedFloatBadValue() {
         HashMap<String, Object> mapMin = new HashMap<>(inputs);
         mapMin.put("validatedFloat", "0.01");
-        ConstraintViolationException e = assertThrows(ConstraintViolationException.class, () -> typedInputs(mapMin));
-        assertThat(e.getMessage(), containsString("Invalid input for `validatedFloat`, it must be more than `0.1`, but received `0.01`"));
+        InputOutputValidationException e = assertThrows(InputOutputValidationException.class, () -> typedInputs(mapMin, "tenant9"));
+        assertThat(e.getMessage()).contains("Invalid value for input `validatedFloat`. Cause: it must be more than `0.1`");
 
         HashMap<String, Object> mapMax = new HashMap<>(inputs);
         mapMax.put("validatedFloat", "1.01");
 
-        e = assertThrows(ConstraintViolationException.class, () -> typedInputs(mapMax));
+        e = assertThrows(InputOutputValidationException.class, () -> typedInputs(mapMax, "tenant9"));
 
-        assertThat(e.getMessage(), containsString("Invalid input for `validatedFloat`, it must be less than `0.5`, but received `1.01`"));
+        assertThat(e.getMessage()).contains("Invalid value for input `validatedFloat`. Cause: it must be less than `0.5`");
     }
 
     @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant10")
     void inputValidatedTimeBadValue() {
         HashMap<String, Object> mapMin = new HashMap<>(inputs);
         mapMin.put("validatedTime", "00:00:01");
-        ConstraintViolationException e = assertThrows(ConstraintViolationException.class, () -> typedInputs(mapMin));
-        assertThat(e.getMessage(), containsString("Invalid input for `validatedTime`, it must be after `01:00`, but received `00:00:01`"));
+        InputOutputValidationException e = assertThrows(InputOutputValidationException.class, () -> typedInputs(mapMin, "tenant10"));
+        assertThat(e.getMessage()).contains("Invalid value for input `validatedTime`. Cause: it must be after `01:00`");
 
         HashMap<String, Object> mapMax = new HashMap<>(inputs);
         mapMax.put("validatedTime", "14:00:00");
 
-        e = assertThrows(ConstraintViolationException.class, () -> typedInputs(mapMax));
+        e = assertThrows(InputOutputValidationException.class, () -> typedInputs(mapMax, "tenant10"));
 
-        assertThat(e.getMessage(), containsString("Invalid input for `validatedTime`, it must be before `11:59:59`, but received `14:00:00`"));
+        assertThat(e.getMessage()).contains("Invalid value for input `validatedTime`. Cause: it must be before `11:59:59`");
     }
 
     @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
-    void inputFailed() {
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant11")
+    void inputUriFailed() {
         HashMap<String, Object> map = new HashMap<>(inputs);
-        map.put("uri", "http:/bla");
+        map.put("uri", "justastring");
 
-        ConstraintViolationException e = assertThrows(ConstraintViolationException.class, () -> typedInputs(map));
+        InputOutputValidationException e = assertThrows(InputOutputValidationException.class, () -> typedInputs(map, "tenant11"));
 
-        assertThat(e.getMessage(), containsString("Invalid input for `uri`, Expected `URI` but received `http:/bla`, but received `http:/bla`"));
+        assertThat(e.getMessage()).contains("Invalid value for input `uri`. Cause: Invalid URI format.");
     }
 
     @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
-    void inputEnumFailed() {
-        HashMap<String, Object> map = new HashMap<>(inputs);
-        map.put("enum", "INVALID");
-
-        ConstraintViolationException e = assertThrows(ConstraintViolationException.class, () -> typedInputs(map));
-
-        assertThat(e.getMessage(), is("enum: Invalid input for `enum`, it must match the values `[ENUM_VALUE, OTHER_ONE]`, but received `INVALID`"));
-    }
-
-    @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant13")
     void inputArrayFailed() {
         HashMap<String, Object> map = new HashMap<>(inputs);
         map.put("array", "[\"s1\", \"s2\"]");
 
-        ConstraintViolationException e = assertThrows(ConstraintViolationException.class, () -> typedInputs(map));
+        InputOutputValidationException e = assertThrows(InputOutputValidationException.class, () -> typedInputs(map, "tenant13"));
 
-        assertThat(e.getMessage(), containsString("Invalid input for `array`, Unable to parse array element as `INT` on `s1`, but received `[\"s1\", \"s2\"]`"));
+        assertThat(e.getMessage()).contains("Invalid value for input `array`. Cause: Unable to parse array element as `INT` on `s1`");
     }
 
     @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant14")
     void inputEmptyJson() {
         HashMap<String, Object> map = new HashMap<>(inputs);
-        map.put("json", "{}");
+        map.put("json1", "{}");
 
-        Map<String, Object> typeds = typedInputs(map);
+        Map<String, Object> typeds = typedInputs(map, "tenant14");
 
-        assertThat(typeds.get("json"), instanceOf(Map.class));
-        assertThat(((Map<?, ?>) typeds.get("json")).size(), is(0));
+        assertThat(typeds.get("json1")).isInstanceOf(Map.class);
+        assertThat(((Map<?, ?>) typeds.get("json1")).size()).isZero();
     }
 
     @Test
-    @LoadFlows({"flows/valids/inputs.yaml"})
-    void inputEmptyJsonFlow() throws TimeoutException, QueueException {
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant15")
+    void inputEmptyJsonFlow() throws TimeoutException, QueueException, InternalException {
         HashMap<String, Object> map = new HashMap<>(inputs);
-        map.put("json", "{}");
+        map.put("json1", "{}");
 
         Execution execution = runnerUtils.runOne(
-            null,
+            "tenant15",
             "io.kestra.tests",
             "inputs",
             null,
             (flow, execution1) -> flowIO.readExecutionInputs(flow, execution1, map)
         );
 
-        assertThat(execution.getTaskRunList(), hasSize(14));
-        assertThat(execution.getState().getCurrent(), is(State.Type.SUCCESS));
+        assertThat(execution.getTaskRunList()).hasSize(16);
+        assertThat(execution.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
 
-        assertThat(execution.getInputs().get("json"), instanceOf(Map.class));
-        assertThat(((Map<?, ?>) execution.getInputs().get("json")).size(), is(0));
-        assertThat((String) execution.findTaskRunsByTaskId("jsonOutput").getFirst().getOutputs().get("value"), is("{}"));
+        assertThat(execution.getInputs().get("json1")).isInstanceOf(Map.class);
+        assertThat(((Map<?, ?>) execution.getInputs().get("json1")).size()).isZero();
+        assertThat((String) taskOutputService.getOutputs(execution.findTaskRunsByTaskId("jsonOutput").getFirst()).get("value")).isEqualTo("{}");
     }
 
-    @RetryingTest(5) // it can happen that a log from another execution arrives first, so we enable retry
-    @LoadFlows({"flows/valids/input-log-secret.yaml"})
-    void shouldNotLogSecretInput() throws TimeoutException, QueueException {
-        Flux<LogEntry> receive = TestsUtils.receive(logQueue, l -> {});
+    @Test
+    @LoadFlows(value = { "flows/valids/input-log-secret.yaml" }, tenantId = "tenant16")
+    void shouldNotLogSecretInput() throws TimeoutException, QueueException, InterruptedException {
+        AtomicReference<LogEntry> logEntry = new AtomicReference<>();
+        CountDownLatch countDownLatch = new CountDownLatch(1);
+        logQueue.addListener(left ->
+        {
+            if (left.getTenantId().equals("tenant16")) {
+                logEntry.set(left);
+                countDownLatch.countDown();
+            }
+        });
 
         Execution execution = runnerUtils.runOne(
-            null,
+            "tenant16",
             "io.kestra.tests",
-            "input-log-secret"
+            "input-log-secret",
+            null,
+            (flow, exec) -> flowInputOutput.readExecutionInputs(flow, exec, Map.of("nested.key", "pass"))
         );
 
-        assertThat(execution.getTaskRunList(), hasSize(1));
-        assertThat(execution.getState().getCurrent(), is(State.Type.SUCCESS));
+        assertThat(execution.getTaskRunList()).hasSize(1);
+        assertThat(execution.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
+        assertTrue(countDownLatch.await(10, TimeUnit.SECONDS));
+        assertThat(logEntry.get()).isNotNull();
+        assertThat(logEntry.get().getMessage()).isEqualTo("These are my secrets: ****** - ******");
+    }
 
-        var logEntry = receive.blockLast();
-        assertThat(logEntry, notNullValue());
-        assertThat(logEntry.getMessage(), is("This is my secret: ********"));
+    @Test
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant17")
+    void fileInputWithFileDefault() throws IOException, QueueException, TimeoutException, io.kestra.core.exceptions.InternalException {
+        HashMap<String, Object> newInputs = new HashMap<>(InputsTest.inputs);
+        URI file = createFile();
+        newInputs.put("file", file);
+
+        Execution execution = runnerUtils.runOne(
+            "tenant17",
+            "io.kestra.tests",
+            "inputs",
+            null,
+            (flow, execution1) -> flowIO.readExecutionInputs(flow, execution1, newInputs)
+        );
+
+        assertThat(execution.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
+        assertThat((String) taskOutputService.getOutputs(execution.findTaskRunsByTaskId("file").getFirst()).get("value")).isEqualTo(file.toString());
+    }
+
+    @Test
+    @LoadFlows(value = { "flows/valids/inputs.yaml" }, tenantId = "tenant18")
+    void fileInputWithNsfile() throws IOException, QueueException, TimeoutException, URISyntaxException, io.kestra.core.exceptions.InternalException {
+        HashMap<String, Object> inputs = new HashMap<>(InputsTest.inputs);
+        URI file = createNsFile(false);
+        inputs.put("file", file);
+
+        Execution execution = runnerUtils.runOne(
+            "tenant18",
+            "io.kestra.tests",
+            "inputs",
+            null,
+            (flow, execution1) -> flowIO.readExecutionInputs(flow, execution1, inputs)
+        );
+
+        assertThat(execution.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
+        assertThat((String) taskOutputService.getOutputs(execution.findTaskRunsByTaskId("file").getFirst()).get("value")).isEqualTo(file.toString());
+    }
+
+    @Test
+    @LoadFlows(value = "flows/invalids/inputs-with-multiple-constraint-violations.yaml")
+    void multipleConstraintViolations() {
+        InputOutputValidationException ex = assertThrows(
+            InputOutputValidationException.class, () -> runnerUtils.runOne(
+                MAIN_TENANT, "io.kestra.tests", "inputs-with-multiple-constraint-violations", null,
+                (f, e) -> flowIO.readExecutionInputs(f, e, Map.of("multi", List.of("F", "H")))
+            )
+        );
+
+        List<String> messages = Arrays.asList(ex.getMessage().split(System.lineSeparator()));
+
+        assertThat(messages).containsExactlyInAnyOrder(
+            "Invalid value for input `multi`. Cause: value `F` doesn't match the values `[A, B, C]`",
+            "Invalid value for input `multi`. Cause: value `H` doesn't match the values `[A, B, C]`"
+        );
+    }
+
+    @Test
+    @LoadFlows(value = "flows/valids/secret-input-validation.yaml")
+    void secretInputValidation() {
+        Flow flow = flowRepository.findById(MAIN_TENANT, "io.kestra.tests", "secret-input-validation").get();
+        InputOutputValidationException ex = assertThrows(
+            InputOutputValidationException.class, () -> flowIO.readExecutionInputs(
+                flow,
+                Execution.builder()
+                    .id("test")
+                    .namespace(flow.getNamespace())
+                    .tenantId(flow.getTenantId())
+                    .flowRevision(1)
+                    .flowId(flow.getId())
+                    .build(),
+                Map.of("input1", "any")
+            )
+        );
+        assertThat(ex.getMessage()).isEqualTo("Invalid value for input `input1`. Cause: input1: it must match the pattern `(?=.{8,})(?=.*[A-Z])(?=.*[0-9]).*`");
+
+        Map<String, Object> resolvedInputs = flowIO.readExecutionInputs(
+            flow,
+            Execution.builder()
+                .id("test")
+                .namespace(flow.getNamespace())
+                .tenantId(flow.getTenantId())
+                .flowRevision(1)
+                .flowId(flow.getId())
+                .build(),
+            Map.of("input1", "1245Abc@$Zk")
+        );
+        EncryptedString encryptedString = (EncryptedString) resolvedInputs.get("input1");
+        assertThat(encryptedString).isNotNull();
+
+    }
+
+    private URI createFile() throws IOException {
+        File tempFile = File.createTempFile("file", ".txt");
+        Files.write(tempFile.toPath(), "Hello World".getBytes());
+        return tempFile.toPath().toUri();
+    }
+
+    private URI createNsFile(boolean nsInAuthority) throws IOException, URISyntaxException {
+        String namespace = "io.kestra.tests";
+        String filePath = "file.txt";
+        Namespace namespaceStorage = namespaceFactory.of(MAIN_TENANT, namespace, storageInterface);
+        namespaceStorage.putFile(Path.of("/" + filePath), new ByteArrayInputStream("Hello World".getBytes()));
+        return URI.create("nsfile://" + (nsInAuthority ? namespace : "") + "/" + filePath);
     }
 }

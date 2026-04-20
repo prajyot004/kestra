@@ -1,5 +1,17 @@
 package io.kestra.plugin.core.http;
 
+import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.util.List;
+import java.util.Map;
+import java.util.OptionalInt;
+
+import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.ArrayUtils;
+
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.http.HttpRequest;
 import io.kestra.core.http.HttpResponse;
@@ -11,20 +23,10 @@ import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.models.tasks.common.EncryptedString;
 import io.kestra.core.runners.RunContext;
+
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
-import org.apache.commons.io.IOUtils;
-import org.apache.commons.lang3.ArrayUtils;
-
-import java.io.IOException;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
-import java.util.List;
-import java.util.Map;
-import java.util.OptionalInt;
 
 @SuperBuilder
 @ToString
@@ -32,11 +34,11 @@ import java.util.OptionalInt;
 @Getter
 @NoArgsConstructor
 @Schema(
-    title = "Make an HTTP API request to a specified URL and store the response as output.",
+    title = "Send an HTTP request and capture the response.",
     description = """
-                  This task makes an API call to a specified URL of an HTTP server and stores the response as output.
-                  By default, the maximum length of the response is limited to 10MB, but it can be increased to at most 2GB by using the `options.maxContentLength` property.
-                  Note that the response is added as output to the task. If you need to process large API payloads, we recommend using the `Download` task instead."""
+        Generic HTTP client for APIs: renders URL, headers/body/form data, sends the request, and stores status/body/headers as task outputs.
+
+        Default max response size is 10 MB (raise via `options.maxContentLength`, up to 2 GB). For large payloads use `Download`. Prefer dedicated plugins when available for better ergonomics."""
 )
 @Plugin(
     examples = {
@@ -52,12 +54,33 @@ import java.util.OptionalInt;
                     type: io.kestra.plugin.core.http.Request
                     uri: http://host.docker.internal:8080/api/v1/executions/dev/inputs_demo
                     options:
-                      basicAuthUser: admin
-                      basicAuthPassword: admin
+                      auth:
+                        type: BASIC
+                        username: "{{ secret('API_USERNAME') }}"
+                        password: "{{ secret('API_PASSWORD') }}"
                     method: POST
                     contentType: multipart/form-data
                     formData:
                       user: John Doe
+                """
+        ),
+        @Example(
+            title = "Make an HTTP request authenticated with Digest auth (RFC 7616).",
+            full = true,
+            code = """
+                id: digest_auth_call
+                namespace: company.team
+
+                tasks:
+                  - id: digest_auth_api
+                    type: io.kestra.plugin.core.http.Request
+                    uri: https://example.com/protected
+                    method: GET
+                    options:
+                      auth:
+                        type: DIGEST
+                        username: "{{ secret('API_USERNAME') }}"
+                        password: "{{ secret('API_PASSWORD') }}"
                 """
         ),
         @Example(
@@ -77,7 +100,7 @@ import java.util.OptionalInt;
                 """
         ),
         @Example(
-            title = "Execute a Kestra flow via an HTTP request authenticated with API key passed in the header.",
+            title = "Execute a Kestra flow via an HTTP request authenticated with an API key passed in the header.",
             full = true,
             code = """
                 id: api_key_auth_call
@@ -93,7 +116,7 @@ import java.util.OptionalInt;
                 """
         ),
         @Example(
-            title = "Execute a Kestra flow via an HTTP request authenticated with API key passed in the query parameters.",
+            title = "Execute a Kestra flow via an HTTP request authenticated with an API key passed in the query parameters.",
             full = true,
             code = """
                 id: api_key_auth_call
@@ -272,17 +295,53 @@ import java.util.OptionalInt;
                     formData:
                       url: "{{ outputs.http_download.uri }}"
                 """
+        ),
+        @Example(
+            title = "Send a multiline JSON message using HTTP POST request and inputs with a pebble expression. We recommend this method to avoid JSON string interpolation",
+            full = true,
+            code = """
+                id: http_multiline_json
+                namespace: company.team
+
+                inputs:
+                  - id: title
+                    type: STRING
+                    defaults: This is the title of the request
+                  - id: message
+                    type: STRING
+                    defaults: |-
+                      This is my long
+                      multiline message.
+                  - id: priority
+                    type: INT
+                    defaults: 5
+
+                tasks:
+                  - id: send
+                    type: io.kestra.plugin.core.http.Request
+                    uri: "https://reqres.in/api/test-request"
+                    method: "POST"
+                    body: |
+                      {{ {
+                        "title": inputs.title,
+                        "message": inputs.message,
+                        "priority": inputs.priority
+                      } }}
+                """
         )
     },
     aliases = "io.kestra.plugin.fs.http.Request"
 )
 public class Request extends AbstractHttp implements RunnableTask<Request.Output> {
+
+    private static final int MAX_OUTPUT_BODY_BYTES = 19 * 1024 * 1024; // ~19MB safety margin
+
     @Builder.Default
     @Schema(
         title = "If true, the HTTP response body will be automatically encrypted and decrypted in the outputs, provided that encryption is configured in your Kestra configuration.",
         description = "If this property is set to `true`, this task will output the request body using the `encryptedBody` output property; otherwise, the request body will be stored in the `body` output property."
     )
-    private Property<Boolean> encryptBody = Property.of(false);
+    private Property<Boolean> encryptBody = Property.ofValue(false);
 
     public Output run(RunContext runContext) throws Exception {
         try (HttpClient client = this.client(runContext)) {
@@ -293,16 +352,19 @@ public class Request extends AbstractHttp implements RunnableTask<Request.Output
             String body = null;
 
             if (response.getBody() != null) {
-                body = IOUtils.toString(ArrayUtils.toPrimitive(response.getBody()), StandardCharsets.UTF_8.name());
+                byte[] bytes = getResponseBytes(response);
+                body = IOUtils.toString(bytes, StandardCharsets.UTF_8.name());
             }
 
             // check that the string is a valid Unicode string
             if (body != null) {
                 OptionalInt illegalChar = body.chars().filter(c -> !Character.isDefined(c)).findFirst();
                 if (illegalChar.isPresent()) {
-                    throw new IllegalArgumentException("Illegal unicode code point in request body: " + illegalChar.getAsInt() +
-                        ", the Request task only support valid Unicode strings as body.\n" +
-                        "You can try using the Download task instead.");
+                    throw new IllegalArgumentException(
+                        "Illegal unicode code point in request body: " + illegalChar.getAsInt() +
+                            ", the Request task only support valid Unicode strings as body.\n" +
+                            "You can try using the Download task instead."
+                    );
                 }
             }
 
@@ -310,7 +372,19 @@ public class Request extends AbstractHttp implements RunnableTask<Request.Output
         }
     }
 
-    public Output output(RunContext runContext, HttpRequest request, HttpResponse<Byte[]> response, String body) throws GeneralSecurityException, URISyntaxException, IOException, IllegalVariableEvaluationException {
+    private static byte[] getResponseBytes(HttpResponse<Byte[]> response) {
+        byte[] bytes = ArrayUtils.toPrimitive(response.getBody());
+        if (bytes.length > MAX_OUTPUT_BODY_BYTES) {
+            throw new IllegalArgumentException(
+                "Response body is too large to store in task outputs (" + bytes.length + " bytes > max " + MAX_OUTPUT_BODY_BYTES + " bytes). " +
+                    "Use io.kestra.plugin.core.http.Download to fetch large payloads as files instead."
+            );
+        }
+        return bytes;
+    }
+
+    public Output output(RunContext runContext, HttpRequest request, HttpResponse<Byte[]> response, String body)
+        throws GeneralSecurityException, URISyntaxException, IOException, IllegalVariableEvaluationException {
         boolean encrypt = runContext.render(this.encryptBody).as(Boolean.class).orElseThrow();
         return Output.builder()
             .code(response.getStatus().getCode())
@@ -325,36 +399,36 @@ public class Request extends AbstractHttp implements RunnableTask<Request.Output
     @Getter
     public static class Output implements io.kestra.core.models.tasks.Output {
         @Schema(
-            title = "The URL of the current request."
+            title = "The URL of the current request"
         )
         private final URI uri;
 
         @Schema(
-            title = "The status code of the response."
+            title = "The status code of the response"
         )
         private final Integer code;
 
         @Schema(
-            title = "The headers of the response."
+            title = "The headers of the response"
         )
         @PluginProperty(additionalProperties = List.class)
         private final Map<String, List<String>> headers;
 
         @Schema(
-            title = "The body of the response.",
-            description = "Kestra will by default store the task output using this property. However, if the `encryptBody` property is set to `true`, kestra will instead encrypt the output and store it using the `encryptedBody` output property."
+            title = "The body of the response",
+            description = "Kestra, by default, stores the task output using this property. However, if the `encryptBody` property is set to `true`, Kestra will instead encrypt the output and store it using the `encryptedBody` output property."
         )
         private Object body;
 
         @Schema(
-            title = "The encrypted body of the response.",
-            description = "If the `encryptBody` property is set to `true`, kestra will automatically encrypt the output before storing it, and decrypt it when the output is retrieved in a downstream task."
+            title = "The encrypted body of the response",
+            description = "If the `encryptBody` property is set to `true`, Kestra will automatically encrypt the output before storing it, and decrypt it when the output is retrieved in a downstream task."
         )
         private EncryptedString encryptedBody;
 
         @Schema(
             title = "The form data to be sent in the request body",
-            description = "When sending a file, you can pass a list of maps (i.e. a list of key-value pairs) with a key 'name' and value of the filename, as well as 'content' key with the file's content as value (e.g. passed from flow inputs or outputs from another task)."
+            description = "When sending a file, you can pass a list of maps (i.e., a list of key-value pairs) with a key 'name' and value of the filename, as well as 'content' key with the file's content as value (e.g., passed from flow inputs or outputs from another task)."
         )
         @PluginProperty(dynamic = true)
         protected Map<String, Object> formData;

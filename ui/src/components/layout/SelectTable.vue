@@ -1,79 +1,166 @@
 <template>
-    <div data-component="FILENAME_PLACEHOLDER" class="position-relative">
+    <div ref="container" class="position-relative" @click.capture="(e) => isShiftPressed = e.shiftKey">
         <div v-if="hasSelection && data.length" class="bulk-select-header">
             <slot name="select-actions" />
         </div>
 
-        <template v-if="data.length">
-            <el-table
-                ref="table"
-                v-bind="$attrs"
-                :data="data"
-                @selection-change="selectionChanged"
-            >
-                <slot name="expand" v-if="expandable" />
-                <el-table-column type="selection" v-if="selectable" />
-                <slot name="default" />
-            </el-table>
-        </template>
-
-        <NoData v-else />
+        <el-table
+            ref="table"
+            v-bind="$attrs"
+            :data
+            :rowKey
+            :emptyText="data.length === 0 ? noDataText : ''"
+            @selection-change="selectionChanged"
+            @select="onSelect"
+        >
+            <el-table-column type="selection" v-if="selectable && showSelection" reserveSelection />
+            <slot name="default" />
+        </el-table>
     </div>
 </template>
 
-<script>
-    import NoData from "./NoData.vue";
+<script setup lang="ts">
+    import {ref, onMounted, onUnmounted, onUpdated, watch, nextTick} from "vue";
 
-    export default {
-        components: {NoData},
-        data() {
-            return {
-                hasSelection: false
-            }
-        },
-        methods: {
-            selectionChanged(selection) {
-                this.hasSelection = selection.length > 0;
-                this.$emit("selection-change", selection);
-            },
-            computeHeaderSize() {
-                const tableElement = this.$refs.table?.$el;
+    const props = withDefaults(defineProps<{
+        showSelection?: boolean;
+        selectable?: boolean;
+        expandable?: boolean;
+        data?: any[];
+        noDataText?: string;
+        rowKey?: string | ((row: any) => string | number);
+    }>(), {
+        showSelection: true,
+        selectable: true,
+        expandable: false,
+        data: () => [],
+        noDataText: undefined,
+        rowKey: "id"
+    });
 
-                if(!tableElement) return;
+    const emit = defineEmits<{
+        "selection-change": [selection: any[]];
+    }>();
 
-                this.$el.style.setProperty("--table-header-width", `${tableElement.clientWidth}px`);
-                this.$el.style.setProperty("--table-header-height", `${tableElement.querySelector("thead").clientHeight}px`);
+    const table = ref<any>(null);
+    const hasSelection = ref(false);
+    const container = ref<HTMLElement | null>(null);
+    
+    const lastCheckedIndex = ref<number | null>(null);
+    const isShiftPressed = ref(false);
+
+    const toggleRowExpansion = (row: any, expand?: boolean) => {
+        table.value?.toggleRowExpansion(row, expand);
+    };
+
+    const selectionChanged = (selection: any[]) => {
+        hasSelection.value = selection.length > 0;
+        emit("selection-change", selection);
+    };
+
+    const onSelect = async (selection: any[], row: any) => {
+        const data = props.data ?? [];
+        const currentIndex = data.indexOf(row);
+    
+        const isChecked = selection.some(s => 
+            typeof props.rowKey === "function" 
+                ? props.rowKey(s) === props.rowKey(row) 
+                : s[props.rowKey] === row[props.rowKey]
+        );
+
+        if (isShiftPressed.value && lastCheckedIndex.value !== null) {
+            const start = Math.min(lastCheckedIndex.value, currentIndex);
+            const end = Math.max(lastCheckedIndex.value, currentIndex);
+
+            for (let i = start; i <= end; i++) {
+                table.value?.toggleRowSelection(data[i], isChecked);
             }
-        },
-        props: {
-            selectable: {
-                type: Boolean,
-                default: true
-            },
-            expandable: {
-                type: Boolean,
-                default: false
-            },
-            data: {
-                type: Array,
-                default: () => []
-            }
-        },
-        emits: [
-            "selection-change"
-        ],
-        mounted() {
-            window.addEventListener("resize", this.computeHeaderSize);
-        },
-        unmounted() {
-            window.removeEventListener("resize", this.computeHeaderSize);
-        },
-        updated() {
-            this.computeHeaderSize();
+        
+            await nextTick();
+        
+            const finalSelection = table.value?.getSelectionRows() ?? [];
+            selectionChanged(finalSelection);
+
+            window.getSelection()?.removeAllRanges();
         }
-    }
-</script>
 
+        lastCheckedIndex.value = currentIndex;
+    };
+
+    const clearSelection = () => {
+        table.value?.clearSelection();
+        hasSelection.value = false;
+        lastCheckedIndex.value = null;
+    };
+
+    const setSelection = (selection: any[]) => {
+        table.value?.clearSelection();
+        if (Array.isArray(selection)) {
+            const isFunction = typeof props.rowKey === "function";
+            selection.forEach(sel => {
+                const row = props.data.find(r => isFunction
+                    ? props.rowKey(r) === props.rowKey(sel)
+                    : r[props.rowKey] === sel[props.rowKey]);
+                if (row) table.value?.toggleRowSelection(row, true);
+            });
+        }
+        selectionChanged(selection);
+    };
+
+    const computeHeaderSize = () => {
+        const tableElement = table.value?.$el;
+        if (!tableElement || !container.value) return;
+        container.value.style.setProperty("--table-header-width", `${tableElement.clientWidth}px`);
+        const thead = tableElement.querySelector("thead");
+        if (thead) {
+            container.value.style.setProperty("--table-header-height", `${thead.clientHeight}px`);
+        }
+    };
+
+    onMounted(() => {
+        window.addEventListener("resize", computeHeaderSize);
+    });
+
+    onUnmounted(() => {
+        window.removeEventListener("resize", computeHeaderSize);
+    });
+
+    onUpdated(() => {
+        computeHeaderSize();
+    });
+
+    watch(() => props.data, () => {
+        if (props.data.length === 0) {
+            hasSelection.value = false;
+            table.value?.clearSelection();
+            lastCheckedIndex.value = null;
+        } else {
+            const currentSelection = table.value?.getSelectionRows() ?? [];
+            const validSelection = currentSelection.filter((sel: any) => {
+                const isFunction = typeof props.rowKey === "function";
+                return props.data.some(r => isFunction
+                    ? props.rowKey(r) === props.rowKey(sel)
+                    : r[props.rowKey] === sel[props.rowKey]);
+            });
+            if (validSelection.length !== currentSelection.length) {
+                table.value?.clearSelection();
+                hasSelection.value = false;
+                lastCheckedIndex.value = null;
+            } else if (table.value) {
+                selectionChanged(currentSelection);
+            }
+        }
+    }, {immediate: true});
+
+    const waitTableRender = () => nextTick();
+
+    defineExpose({
+        setSelection,
+        clearSelection,
+        toggleRowExpansion,
+        waitTableRender
+    });
+</script>
 <style scoped lang="scss">
     .bulk-select-header {
         z-index: 1;
@@ -87,6 +174,14 @@
 
         & ~ .el-table {
             z-index: 0;
+        }
+    }
+
+    @media (max-width: 500px) {
+        :deep(.el-table__empty-text) {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
     }
 </style>

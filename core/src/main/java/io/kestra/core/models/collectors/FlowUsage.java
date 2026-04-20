@@ -1,15 +1,5 @@
 package io.kestra.core.models.collectors;
 
-import io.kestra.core.models.flows.Flow;
-import io.kestra.core.models.tasks.Task;
-import io.kestra.core.models.tasks.runners.TaskRunner;
-import io.kestra.core.models.triggers.AbstractTrigger;
-import io.kestra.core.repositories.FlowRepositoryInterface;
-import io.micronaut.core.annotation.Introspected;
-import lombok.Getter;
-import lombok.experimental.SuperBuilder;
-import lombok.extern.jackson.Jacksonized;
-
 import java.lang.reflect.InvocationTargetException;
 import java.util.List;
 import java.util.Map;
@@ -17,11 +7,24 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import io.kestra.core.models.flows.Flow;
+import io.kestra.core.models.tasks.Task;
+import io.kestra.core.models.tasks.runners.TaskRunner;
+import io.kestra.core.models.triggers.AbstractTrigger;
+import io.kestra.core.repositories.FlowRepositoryInterface;
+
+import lombok.Getter;
+import lombok.experimental.SuperBuilder;
+import lombok.extern.jackson.Jacksonized;
+
 @SuperBuilder
 @Getter
 @Jacksonized
-@Introspected
 public class FlowUsage {
+
+    // Namespace used for 'Getting Started' flows.
+    private static final String TUTORIAL_NAMESPACE = "tutorial";
+
     private final Integer count;
     private final Long namespacesCount;
     private final Map<String, Long> taskTypeCount;
@@ -37,12 +40,13 @@ public class FlowUsage {
     }
 
     public static FlowUsage of(List<Flow> flows) {
+        List<Flow> filtered = flows.stream().filter(flow -> !TUTORIAL_NAMESPACE.equals(flow.getNamespace())).toList();
         return FlowUsage.builder()
-            .count(count(flows))
-            .namespacesCount(namespacesCount(flows))
-            .taskTypeCount(taskTypeCount(flows))
-            .triggerTypeCount(triggerTypeCount(flows))
-            .taskRunnerTypeCount(taskRunnerTypeCount(flows))
+            .count(count(filtered))
+            .namespacesCount(namespacesCount(filtered))
+            .taskTypeCount(taskTypeCount(filtered))
+            .triggerTypeCount(triggerTypeCount(filtered))
+            .taskRunnerTypeCount(taskRunnerTypeCount(filtered))
             .build();
     }
 
@@ -76,14 +80,16 @@ public class FlowUsage {
         return allFlows
             .stream()
             .flatMap(Flow::allTasks)
-            .filter(t -> {
+            .filter(t ->
+            {
                 try {
                     return t.getClass().getMethod("getTaskRunner") != null;
                 } catch (NoSuchMethodException e) {
                     return false;
                 }
             })
-            .map(t -> {
+            .map(t ->
+            {
                 try {
                     TaskRunner<?> taskRunner = (TaskRunner<?>) t.getClass().getMethod("getTaskRunner").invoke(t);
                     return taskRunner != null ? taskRunner.getType() : null;

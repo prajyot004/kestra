@@ -1,25 +1,31 @@
 package io.kestra.core.runners.pebble.functions;
 
-import io.kestra.core.exceptions.IllegalVariableEvaluationException;
-import io.kestra.core.junit.annotations.KestraTest;
-import io.kestra.core.models.executions.LogEntry;
-import io.kestra.core.repositories.LogRepositoryInterface;
-import io.kestra.core.runners.VariableRenderer;
-import io.micronaut.context.annotation.Property;
-import jakarta.inject.Inject;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Test;
-import org.slf4j.event.Level;
-
 import java.time.Instant;
 import java.util.Map;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.is;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.mockito.Mockito;
+import org.slf4j.event.Level;
 
-@KestraTest
-@Property(name = "kestra.server-type", value = "WORKER")
+import io.kestra.core.exceptions.IllegalVariableEvaluationException;
+import io.kestra.core.models.executions.LogEntry;
+import io.kestra.core.repositories.LogRepositoryInterface;
+import io.kestra.core.runners.VariableRenderer;
+import io.kestra.core.runners.pebble.PebbleUtils;
+
+import io.micronaut.context.annotation.Property;
+import io.micronaut.test.annotation.MockBean;
+import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
+import jakarta.inject.Inject;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+@MicronautTest
+@Property(name = "kestra.server-type", value = "STANDALONE")
+@Execution(ExecutionMode.SAME_THREAD)
 class ErrorLogsFunctionTest {
     @Inject
     private LogRepositoryInterface logRepository;
@@ -42,7 +48,7 @@ class ErrorLogsFunctionTest {
 
         String render = variableRenderer.render("{{ errorLogs() }}", variables);
 
-        assertThat(render, is("[]"));
+        assertThat(render).isEqualTo("[]");
     }
 
     @Test
@@ -57,11 +63,18 @@ class ErrorLogsFunctionTest {
 
         String render = variableRenderer.render("{{ errorLogs() }}", variables);
 
-        assertThat(render, containsString("first error message"));
-        assertThat(render, containsString("second error message"));
+        assertThat(render).contains("first error message");
+        assertThat(render).contains("second error message");
     }
 
     private LogEntry logEntry(Level level, String message) {
         return LogEntry.builder().tenantId("dev").namespace("namespace").flowId("flow").executionId("execution").timestamp(Instant.now()).level(level).message(message).build();
+    }
+
+    @MockBean(PebbleUtils.class)
+    PebbleUtils pebbleUtils() {
+        PebbleUtils pebbleUtils = Mockito.mock(PebbleUtils.class);
+        Mockito.when(pebbleUtils.calledOnWorker()).thenReturn(true);
+        return pebbleUtils;
     }
 }

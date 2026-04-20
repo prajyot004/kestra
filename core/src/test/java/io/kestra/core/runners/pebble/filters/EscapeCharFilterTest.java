@@ -1,19 +1,20 @@
 package io.kestra.core.runners.pebble.filters;
 
-import io.kestra.core.exceptions.IllegalVariableEvaluationException;
-import io.kestra.core.runners.VariableRenderer;
-import io.kestra.core.junit.annotations.KestraTest;
-import jakarta.inject.Inject;
+import java.util.Map;
+import java.util.stream.Stream;
+
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import java.util.Map;
-import java.util.stream.Stream;
+import io.kestra.core.exceptions.IllegalVariableEvaluationException;
+import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.runners.VariableRenderer;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import jakarta.inject.Inject;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @KestraTest
@@ -29,11 +30,11 @@ class EscapeCharFilterTest {
             Map.of()
         );
 
-        assertThat(render, is(expected));
+        assertThat(render).isEqualTo(expected);
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"foo", ""})
+    @ValueSource(strings = { "foo", "" })
     void invalidTypes(String type) {
         assertThrows(
             IllegalVariableEvaluationException.class,
@@ -46,9 +47,9 @@ class EscapeCharFilterTest {
 
     private static Stream<Arguments> provideValidTypes() {
         return Stream.of(
-            Arguments.of("single", "\"L'eau c'est la vie\"", "L\\'eau c\\'est la vie"),
+            Arguments.of("single", "\"L'eau c'est la vie\"", "L\\'eau c\\'est la vie"), // codespell:ignore
             Arguments.of("double", "'\"Hello\"'", "\\\"Hello\\\""),
-            Arguments.of("shell", "\"L'eau c'est la vie\"", "L'\\''eau c'\\''est la vie"),
+            Arguments.of("shell", "\"L'eau c'est la vie\"", "L'\\''eau c'\\''est la vie"), // codespell:ignore
             Arguments.of("single", "''", ""),
             Arguments.of("double", "''", ""),
             Arguments.of("shell", "''", "")

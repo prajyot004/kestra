@@ -1,15 +1,14 @@
 package io.kestra.cli.commands.sys.database;
 
-import io.micronaut.configuration.picocli.PicocliRunner;
-import io.micronaut.context.ApplicationContext;
-import org.junit.jupiter.api.Test;
-
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.core.Is.is;
+import org.junit.jupiter.api.Test;
+
+import io.micronaut.configuration.picocli.PicocliRunner;
+import io.micronaut.context.ApplicationContext;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 class DatabaseCommandTest {
     @Test
@@ -21,8 +20,8 @@ class DatabaseCommandTest {
             String[] args = {};
             Integer call = PicocliRunner.call(DatabaseCommand.class, ctx, args);
 
-            assertThat(call, is(0));
-            assertThat(out.toString(), containsString("Usage: kestra sys database"));
+            assertThat(call).isZero();
+            assertThat(out.toString()).contains("Usage: kestra sys database");
         }
     }
 }

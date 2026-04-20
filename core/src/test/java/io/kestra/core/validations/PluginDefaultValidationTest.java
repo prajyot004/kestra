@@ -1,18 +1,19 @@
 package io.kestra.core.validations;
 
-import io.kestra.core.models.flows.PluginDefault;
-import io.kestra.core.models.validations.ModelValidator;
-import io.kestra.core.junit.annotations.KestraTest;
-import jakarta.inject.Inject;
-import jakarta.validation.ConstraintViolationException;
-import org.junit.jupiter.api.Test;
-
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import org.junit.jupiter.api.Test;
+
+import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.models.flows.PluginDefault;
+import io.kestra.core.models.validations.ModelValidator;
+
+import jakarta.inject.Inject;
+import jakarta.validation.ConstraintViolationException;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 @KestraTest
 class PluginDefaultValidationTest {
@@ -27,7 +28,7 @@ class PluginDefaultValidationTest {
 
         Optional<ConstraintViolationException> validate = modelValidator.isValid(pluginDefault);
 
-        assertThat(validate.isPresent(), is(true));
+        assertThat(validate.isPresent()).isTrue();
     }
 
     @Test
@@ -41,7 +42,7 @@ class PluginDefaultValidationTest {
 
         Optional<ConstraintViolationException> validate = modelValidator.isValid(pluginDefault);
 
-        assertThat(validate.isPresent(), is(true));
+        assertThat(validate.isPresent()).isTrue();
     }
 
     @Test
@@ -53,7 +54,7 @@ class PluginDefaultValidationTest {
 
         Optional<ConstraintViolationException> validate = modelValidator.isValid(pluginDefault);
 
-        assertThat(validate.isPresent(), is(true));
+        assertThat(validate.isPresent()).isTrue();
     }
 
     @Test
@@ -65,7 +66,7 @@ class PluginDefaultValidationTest {
 
         Optional<ConstraintViolationException> validate = modelValidator.isValid(pluginDefault);
 
-        assertThat(validate.isEmpty(), is(true));
+        assertThat(validate.isEmpty()).isTrue();
     }
 
     @Test
@@ -77,7 +78,7 @@ class PluginDefaultValidationTest {
 
         Optional<ConstraintViolationException> validate = modelValidator.isValid(pluginDefault);
 
-        assertThat(validate.isEmpty(), is(true));
+        assertThat(validate.isEmpty()).isTrue();
     }
 
 }

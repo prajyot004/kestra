@@ -1,20 +1,42 @@
 package io.kestra.webserver.controllers.api;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.core.Is.is;
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.net.URI;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import io.kestra.core.exceptions.ResourceExpiredException;
 import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.models.kv.KVType;
+import io.kestra.core.models.kv.PersistedKvMetadata;
+import io.kestra.core.repositories.KvMetadataRepositoryInterface;
+import io.kestra.core.runners.KVMetadataStateStore;
 import io.kestra.core.storages.StorageInterface;
-import io.kestra.core.storages.StorageObject;
-import io.kestra.core.storages.kv.InternalKVStore;
-import io.kestra.core.storages.kv.KVEntry;
-import io.kestra.core.storages.kv.KVStore;
+import io.kestra.core.storages.kv.*;
+import io.kestra.core.utils.TestsUtils;
 import io.kestra.webserver.controllers.api.KVController.ApiDeleteBulkRequest;
 import io.kestra.webserver.controllers.api.KVController.ApiDeleteBulkResponse;
+import io.kestra.webserver.responses.PagedResults;
+
 import io.micronaut.core.type.Argument;
+import io.micronaut.data.model.Pageable;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.HttpStatus;
@@ -23,27 +45,14 @@ import io.micronaut.http.client.annotation.Client;
 import io.micronaut.http.client.exceptions.HttpClientResponseException;
 import io.micronaut.reactor.http.client.ReactorHttpClient;
 import jakarta.inject.Inject;
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.math.BigDecimal;
-import java.net.URI;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Stream;
-import org.hamcrest.Matchers;
-import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.MethodSource;
+
+import static io.kestra.core.tenant.TenantService.MAIN_TENANT;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.BDDAssertions.within;
 
 @KestraTest(resolveParameters = false)
 class KVControllerTest {
+
     private static final String NAMESPACE = "io.namespace";
 
     @Inject
@@ -53,188 +62,277 @@ class KVControllerTest {
     @Inject
     private StorageInterface storageInterface;
 
+    @Inject
+    private KvMetadataRepositoryInterface kvMetadataRepository;
+
+    @Inject
+    private KVMetadataStateStore kvMetadataStateStore;
+
     @BeforeEach
     public void init() throws IOException {
-        storageInterface.delete(null, null, toKVUri(NAMESPACE, null));
+        storageInterface.delete(MAIN_TENANT, NAMESPACE, toKVUri(NAMESPACE, null));
+        List<PersistedKvMetadata> persistedKvMetadata = kvMetadataRepository.find(Pageable.UNPAGED, MAIN_TENANT, Collections.emptyList(), true, true);
+        kvMetadataRepository.purge(persistedKvMetadata);
     }
 
     @SuppressWarnings("unchecked")
     @Test
-    void list() throws IOException {
-        Instant before = Instant.now().minusMillis(100);
+    void listAllKeys() throws IOException {
+        String namespace = TestsUtils.randomNamespace();
+        KVStore kvStore = new InternalKVStore(MAIN_TENANT, namespace, storageInterface, kvMetadataStateStore);
+        String secondNamespace = TestsUtils.randomNamespace();
+        KVStore secondKvStore = new InternalKVStore(MAIN_TENANT, secondNamespace, storageInterface, kvMetadataStateStore);
+
+        // Should come first in key:desc order
+        String namespaceKey = "namespace-key";
+        String namespaceDescription = "namespaceDescription";
+        Instant beforeInsertion = Instant.now();
+        Instant expirationDate = Instant.now().plus(Duration.ofMinutes(5)).truncatedTo(ChronoUnit.MILLIS);
+        kvStore.put(namespaceKey, new KVValueAndMetadata(new KVMetadata(namespaceDescription, expirationDate), "namespace-value"));
+        Instant afterInsertion = Instant.now();
+        // Expired key, should not be listed
+        kvStore.put("z-expired-key", new KVValueAndMetadata(new KVMetadata(null, Instant.now().minus(1, ChronoUnit.HOURS)), "expired-value"));
+        String secondNamespaceKey = "another-namespace-key";
+        secondKvStore.put(
+            secondNamespaceKey,
+            new KVValueAndMetadata(new KVMetadata("anotherNamespaceDescription", Instant.now().plus(Duration.ofMinutes(10)).truncatedTo(ChronoUnit.MILLIS)), "another-namespace-value")
+        );
+
+        PagedResults<KVEntry> res = client.toBlocking().retrieve(HttpRequest.GET("/api/v1/main/kv?size=1&page=1&sort=key:desc"), Argument.of(PagedResults.class, KVEntry.class));
+
+        assertThat(res.getTotal()).isEqualTo(2);
+        assertThat(res.getResults().size()).isEqualTo(1);
+        KVEntry descOrderKvEntry = res.getResults().getFirst();
+        assertThat(descOrderKvEntry.namespace()).isEqualTo(namespace);
+        assertThat(descOrderKvEntry.key()).isEqualTo(namespaceKey);
+        assertThat(descOrderKvEntry.description()).isEqualTo(namespaceDescription);
+        assertThat(descOrderKvEntry.creationDate()).isBetween(beforeInsertion, afterInsertion);
+        assertThat(descOrderKvEntry.updateDate()).isBetween(beforeInsertion, afterInsertion);
+        assertThat(descOrderKvEntry.expirationDate()).isEqualTo(expirationDate);
+
+        res = client.toBlocking().retrieve(HttpRequest.GET("/api/v1/main/kv?size=1&page=2&sort=key:desc"), Argument.of(PagedResults.class, KVEntry.class));
+        assertThat(res.getTotal()).isEqualTo(2);
+        assertThat(res.getResults().size()).isEqualTo(1);
+        assertThat(res.getResults().getFirst().namespace()).isEqualTo(secondNamespace);
+        assertThat(res.getResults().getFirst().key()).isEqualTo(secondNamespaceKey);
+
+        secondKvStore.delete(secondNamespaceKey);
+        res = client.toBlocking().retrieve(HttpRequest.GET("/api/v1/main/kv?size=1&page=1&sort=key:desc"), Argument.of(PagedResults.class, KVEntry.class));
+        assertThat(res.getTotal()).isEqualTo(1);
+        assertThat(res.getResults().size()).isEqualTo(1);
+        assertThat(res.getResults().getFirst().namespace()).isEqualTo(namespace);
+        assertThat(res.getResults().getFirst().key()).isEqualTo(namespaceKey);
+    }
+
+    @Test
+    void listKeysWithInheritance() throws IOException {
         Instant myKeyExpirationDate = Instant.now().plus(Duration.ofMinutes(5)).truncatedTo(ChronoUnit.MILLIS);
-        Instant mySecondKeyExpirationDate = Instant.now().plus(Duration.ofMinutes(10)).truncatedTo(ChronoUnit.MILLIS);
-        storageInterface.put(null, NAMESPACE, toKVUri(NAMESPACE, "my-key"), new StorageObject(Map.of("expirationDate", myKeyExpirationDate.toString()), new ByteArrayInputStream("my-value".getBytes())));
-        storageInterface.put(null, NAMESPACE, toKVUri(NAMESPACE, "my-second-key"), new StorageObject(Map.of("expirationDate", mySecondKeyExpirationDate.toString()), new ByteArrayInputStream("my-second-value".getBytes())));
-        Instant after = Instant.now().plusMillis(100);
+        String namespaceParent = "io";
+        String namespaceDescription = "in the namespace";
+        String namespaceParentDescription = "in the parent namespace";
 
-        List<KVEntry> res = client.toBlocking().retrieve(HttpRequest.GET("/api/v1/namespaces/" + NAMESPACE + "/kv"), Argument.of(List.class, KVEntry.class));
-        res.stream().forEach(entry -> {
-            assertThat(entry.creationDate().isAfter(before) && entry.creationDate().isBefore(after), is(true));
-            assertThat(entry.updateDate().isAfter(before) && entry.updateDate().isBefore(after), is(true));
-        });
+        kvStore().put("shared-key", new KVValueAndMetadata(new KVMetadata(namespaceDescription, myKeyExpirationDate), "my-value"));
+        kvStore().put("child-key", new KVValueAndMetadata(new KVMetadata(namespaceDescription, myKeyExpirationDate), "my-second-value"));
 
-        assertThat(res.stream().filter(entry -> entry.key().equals("my-key")).findFirst().get().expirationDate(), is(myKeyExpirationDate));
-        assertThat(res.stream().filter(entry -> entry.key().equals("my-second-key")).findFirst().get().expirationDate(), is(mySecondKeyExpirationDate));
+        kvStore(namespaceParent).put("shared-key", new KVValueAndMetadata(new KVMetadata(namespaceParentDescription, myKeyExpirationDate), "my-value"));
+        kvStore(namespaceParent).put("parent-key", new KVValueAndMetadata(new KVMetadata(namespaceParentDescription, myKeyExpirationDate), "my-second-value"));
+
+        List<KVEntry> res = client.toBlocking().retrieve(HttpRequest.GET("/api/v1/main/namespaces/" + NAMESPACE + "/kv/inheritance"), Argument.of(List.class, KVEntry.class));
+
+        assertThat(res).hasSize(2);
+        Map<String, String> keyDescriptions = res.stream()
+            .collect(Collectors.toMap(KVEntry::key, KVEntry::description));
+        assertThat(keyDescriptions).isEqualTo(
+            Map.of(
+                "shared-key", namespaceParentDescription,
+                "parent-key", namespaceParentDescription
+            )
+        );
+
     }
 
-    static Stream<Arguments> kvGetArgs() {
+    static Stream<Arguments> kvGetKeyValueArgs() {
         return Stream.of(
-            Arguments.of("{hello:\"world\"}", KVType.JSON, "{\"hello\":\"world\"}"),
-            Arguments.of("[\"hello\",\"world\"]", KVType.JSON, "[\"hello\",\"world\"]"),
-            Arguments.of("\"hello\"", KVType.STRING, "\"hello\""),
-            Arguments.of("1", KVType.NUMBER, "1"),
-            Arguments.of("1.0", KVType.NUMBER, "1.0"),
-            Arguments.of("true", KVType.BOOLEAN, "true"),
-            Arguments.of("false", KVType.BOOLEAN, "false"),
-            Arguments.of("2021-09-01", KVType.DATE, "\"2021-09-01\""),
-            Arguments.of("2021-09-01T01:02:03Z", KVType.DATETIME, "\"2021-09-01T01:02:03Z\""),
-            Arguments.of("\"PT5S\"", KVType.DURATION, "\"PT5S\"")
+            Arguments.of(Map.of("hello", "world"), KVType.JSON, "{\"hello\":\"world\"}"),
+            Arguments.of(List.of("hello", "world"), KVType.JSON, "[\"hello\",\"world\"]"),
+            Arguments.of("hello", KVType.STRING, "\"hello\""),
+            Arguments.of(1, KVType.NUMBER, "1"),
+            Arguments.of(1.1, KVType.NUMBER, "1.1"),
+            Arguments.of(true, KVType.BOOLEAN, "true"),
+            Arguments.of(false, KVType.BOOLEAN, "false"),
+            Arguments.of(LocalDate.parse("2021-09-01"), KVType.DATE, "\"2021-09-01\""),
+            Arguments.of(Instant.parse("2021-09-01T01:02:03Z"), KVType.DATETIME, "\"2021-09-01T01:02:03Z\""),
+            Arguments.of(Duration.ofSeconds(5), KVType.DURATION, "\"PT5S\"")
         );
     }
 
     @ParameterizedTest
-    @MethodSource("kvGetArgs")
-    void get(String storedIonValue, KVType expectedType, String expectedValue) throws IOException {
-        storageInterface.put(
-            null,
-            NAMESPACE,
-            toKVUri(NAMESPACE, "my-key"),
-            new StorageObject(
-                Map.of("expirationDate", Instant.now().plus(Duration.ofMinutes(5)).toString()),
-                new ByteArrayInputStream(storedIonValue.getBytes())
-            )
-        );
+    @MethodSource("kvGetKeyValueArgs")
+    void getKeyValue(Object value, KVType expectedType, String expectedValue) throws IOException {
+        Instant beforeInsertion = Instant.now();
+        kvStore().put("my-key", new KVValueAndMetadata(new KVMetadata(null, Instant.now().plus(Duration.ofMinutes(5))), value));
+        Instant afterInsertion = Instant.now();
 
-        String res = client.toBlocking().retrieve(HttpRequest.GET("/api/v1/namespaces/" + NAMESPACE + "/kv/my-key"), String.class);
-        assertThat(res, containsString("\"type\":\"" + expectedType + "\""));
-        assertThat(res, containsString("\"value\":" + expectedValue));
+        String res = client.toBlocking().retrieve(HttpRequest.GET("/api/v1/main/namespaces/" + NAMESPACE + "/kv/my-key"), String.class);
+        assertThat(res).contains("\"type\":\"" + expectedType + "\"");
+        assertThat(res).contains("\"value\":" + expectedValue);
+        assertThat(res).contains("\"revision\":" + 1);
+        Pattern updatedDateFinder = Pattern.compile("\"updated\":\\s*\"([^\"]+)\"");
+        Matcher matcher = updatedDateFinder.matcher(res);
+        matcher.find();
+        assertThat(Instant.parse(matcher.group(1))).isBetween(beforeInsertion, afterInsertion);
+
+        beforeInsertion = Instant.now();
+        // Test that revision and update date are properly updated
+        kvStore().put("my-key", new KVValueAndMetadata(new KVMetadata("some description", Instant.now().plus(Duration.ofMinutes(5))), value));
+        afterInsertion = Instant.now();
+
+        res = client.toBlocking().retrieve(HttpRequest.GET("/api/v1/main/namespaces/" + NAMESPACE + "/kv/my-key"), String.class);
+        assertThat(res).contains("\"revision\":" + 2);
+        matcher = updatedDateFinder.matcher(res);
+        matcher.find();
+        assertThat(Instant.parse(matcher.group(1))).isBetween(beforeInsertion, afterInsertion);
     }
 
     @Test
-    void getNotFound() {
-        HttpClientResponseException httpClientResponseException = Assertions.assertThrows(HttpClientResponseException.class, () -> client.toBlocking().retrieve(HttpRequest.GET("/api/v1/namespaces/" + NAMESPACE + "/kv/my-key")));
-        assertThat(httpClientResponseException.getStatus(), is(HttpStatus.NOT_FOUND));
-        assertThat(httpClientResponseException.getMessage(), is("Not Found: No value found for key 'my-key' in namespace '" + NAMESPACE + "'"));
+    void getKeyValueNotFound() {
+        HttpClientResponseException httpClientResponseException = Assertions
+            .assertThrows(HttpClientResponseException.class, () -> client.toBlocking().retrieve(HttpRequest.GET("/api/v1/main/namespaces/" + NAMESPACE + "/kv/my-key")));
+        assertThat(httpClientResponseException.getStatus().getCode()).isEqualTo(HttpStatus.NOT_FOUND.getCode());
+        assertThat(httpClientResponseException.getMessage()).isEqualTo("Not Found: No value found for key 'my-key' in namespace '" + NAMESPACE + "'");
     }
 
     @Test
-    void getExpired() throws IOException {
-        storageInterface.put(
-            null,
-            NAMESPACE,
-            toKVUri(NAMESPACE, "my-key"),
-            new StorageObject(
-                Map.of("expirationDate", Instant.now().minus(Duration.ofMinutes(5)).toString()),
-                new ByteArrayInputStream("value".getBytes())
-            )
-        );
+    void getKeyValueExpired() throws IOException {
+        kvStore().put("my-key", new KVValueAndMetadata(new KVMetadata(null, Instant.now().minus(Duration.ofMinutes(5))), "value"));
 
-        HttpClientResponseException httpClientResponseException = Assertions.assertThrows(HttpClientResponseException.class, () -> client.toBlocking().retrieve(HttpRequest.GET("/api/v1/namespaces/" + NAMESPACE + "/kv/my-key")));
-        assertThat(httpClientResponseException.getStatus().getCode(), is(HttpStatus.GONE.getCode()));
-        assertThat(httpClientResponseException.getMessage(), is("Resource has expired: The requested value has expired"));
+        HttpClientResponseException httpClientResponseException = Assertions
+            .assertThrows(HttpClientResponseException.class, () -> client.toBlocking().retrieve(HttpRequest.GET("/api/v1/main/namespaces/" + NAMESPACE + "/kv/my-key")));
+        assertThat(httpClientResponseException.getStatus().getCode()).isEqualTo(HttpStatus.GONE.getCode());
+        assertThat(httpClientResponseException.getMessage()).isEqualTo("Resource has expired: The requested value has expired");
     }
 
-    static Stream<Arguments> kvPutArgs() {
+    static Stream<Arguments> kvSetKeyValueArgs() {
         return Stream.of(
-            Arguments.of(MediaType.APPLICATION_JSON, "{\"hello\":\"world\"}", Map.class),
-            Arguments.of(MediaType.APPLICATION_JSON, "[\"hello\",\"world\"]", List.class),
-            Arguments.of(MediaType.APPLICATION_JSON, "\"hello\"", String.class),
-            Arguments.of(MediaType.APPLICATION_JSON, "1", Integer.class),
-            Arguments.of(MediaType.APPLICATION_JSON, "1.0", BigDecimal.class),
-            Arguments.of(MediaType.APPLICATION_JSON, "true", Boolean.class),
-            Arguments.of(MediaType.APPLICATION_JSON, "false", Boolean.class),
-            Arguments.of(MediaType.APPLICATION_JSON, "2021-09-01", LocalDate.class),
-            Arguments.of(MediaType.APPLICATION_JSON, "2021-09-01T01:02:03Z", Instant.class),
-            Arguments.of(MediaType.APPLICATION_JSON, "\"PT5S\"", Duration.class)
+            Arguments.of(MediaType.TEXT_PLAIN, "{\"hello\":\"world\"}", Map.class),
+            Arguments.of(MediaType.TEXT_PLAIN, "[\"hello\",\"world\"]", List.class),
+            Arguments.of(MediaType.TEXT_PLAIN, "\"hello\"", String.class),
+            Arguments.of(MediaType.TEXT_PLAIN, "1", Integer.class),
+            Arguments.of(MediaType.TEXT_PLAIN, "1.0", BigDecimal.class),
+            Arguments.of(MediaType.TEXT_PLAIN, "true", Boolean.class),
+            Arguments.of(MediaType.TEXT_PLAIN, "false", Boolean.class),
+            Arguments.of(MediaType.TEXT_PLAIN, "2021-09-01", LocalDate.class),
+            Arguments.of(MediaType.TEXT_PLAIN, "2021-09-01T01:02:03Z", Instant.class),
+            Arguments.of(MediaType.TEXT_PLAIN, "\"PT5S\"", Duration.class)
         );
     }
 
     @ParameterizedTest
-    @MethodSource("kvPutArgs")
-    void put(MediaType mediaType, String value, Class<?> expectedClass) throws IOException, ResourceExpiredException {
-        client.toBlocking().exchange(HttpRequest.PUT("/api/v1/namespaces/" + NAMESPACE + "/kv/my-key", value).contentType(mediaType).header("ttl", "PT5M"));
+    @MethodSource("kvSetKeyValueArgs")
+    void setKeyValue(MediaType mediaType, String value, Class<?> expectedClass) throws IOException, ResourceExpiredException {
+        String myDescription = "myDescription";
+        client.toBlocking()
+            .exchange(HttpRequest.PUT("/api/v1/main/namespaces/" + NAMESPACE + "/kv/my-key", value).contentType(mediaType).header("ttl", "PT5M").header("description", myDescription));
 
-        KVStore kvStore = new InternalKVStore(null, NAMESPACE, storageInterface);
+        KVStore kvStore = kvStore();
         Class<?> valueClazz = kvStore.getValue("my-key").get().value().getClass();
-        assertThat("Expected value to be a " + expectedClass + " but was " + valueClazz, expectedClass.isAssignableFrom(valueClazz), is(true));
+        assertThat(expectedClass.isAssignableFrom(valueClazz)).as("Expected value to be a " + expectedClass + " but was " + valueClazz).isTrue();
 
         List<KVEntry> list = kvStore.list();
-        assertThat(list.size(), is(1));
+        assertThat(list.size()).isEqualTo(1);
         KVEntry kvEntry = list.get(0);
-        assertThat(kvEntry.expirationDate().isAfter(Instant.now().plus(Duration.ofMinutes(4))), is(true));
-        assertThat(kvEntry.expirationDate().isBefore(Instant.now().plus(Duration.ofMinutes(6))), is(true));
+        assertThat(kvEntry.expirationDate().isAfter(Instant.now().plus(Duration.ofMinutes(4)))).isTrue();
+        assertThat(kvEntry.expirationDate().isBefore(Instant.now().plus(Duration.ofMinutes(6)))).isTrue();
+        assertThat(kvEntry.description()).isEqualTo(myDescription);
+    }
+
+    private InternalKVStore kvStore() {
+        return this.kvStore(NAMESPACE);
+    }
+
+    private InternalKVStore kvStore(String namespace) {
+        return new InternalKVStore(MAIN_TENANT, namespace, storageInterface, kvMetadataStateStore);
     }
 
     @Test
-    void delete() throws IOException {
-        storageInterface.put(
-            null,
-            NAMESPACE,
-            toKVUri(NAMESPACE, "my-key"),
-            new StorageObject(
-                Map.of("expirationDate", Instant.now().plus(Duration.ofMinutes(5)).toString()),
-                new ByteArrayInputStream("\"content\"".getBytes())
-            )
-        );
+    void deleteKeyValue() throws IOException {
+        InternalKVStore kvStore = kvStore();
+        kvStore.put("my-key", new KVValueAndMetadata(new KVMetadata(null, Instant.now().plus(Duration.ofMinutes(5))), "content"));
 
-        assertThat(storageInterface.exists(null, NAMESPACE, toKVUri(NAMESPACE, "my-key")), is(true));
-        client.toBlocking().exchange(HttpRequest.DELETE("/api/v1/namespaces/" + NAMESPACE + "/kv/my-key"));
+        assertThat(kvStore.exists("my-key")).isTrue();
+        client.toBlocking().exchange(HttpRequest.DELETE("/api/v1/main/namespaces/" + NAMESPACE + "/kv/my-key"));
 
-        assertThat(storageInterface.exists(null, NAMESPACE, toKVUri(NAMESPACE, "my-key")), is(false));
+        assertThat(kvStore.exists("my-key")).isFalse();
+        // Soft delete, storage object still exists, purge must be used to fully delete it
+        assertThat(storageInterface.exists(MAIN_TENANT, NAMESPACE, toKVUri(NAMESPACE, "my-key"))).isTrue();
     }
 
     @Test
-    void shouldReturnSuccessForDeleteBulkOperationGivenExistingKeys() throws IOException {
+    void shouldReturnSuccessForDeleteKeyValueBulkOperationGivenExistingKeys() throws IOException {
         // Given
-        storageInterface.put(
-            null,
-            NAMESPACE,
-            toKVUri(NAMESPACE, "my-key"),
-            new StorageObject(
-                Map.of("expirationDate", Instant.now().plus(Duration.ofMinutes(5)).toString()),
-                new ByteArrayInputStream("\"content\"".getBytes())
-            )
-        );
-        assertThat(storageInterface.exists(null, NAMESPACE, toKVUri(NAMESPACE, "my-key")), is(true));
+        InternalKVStore kvStore = kvStore();
+        kvStore.put("my-key", new KVValueAndMetadata(new KVMetadata(null, Instant.now().plus(Duration.ofMinutes(5))), "content"));
+        assertThat(kvStore.exists("my-key")).isTrue();
 
         // When
         HttpResponse<ApiDeleteBulkResponse> response = client.toBlocking()
-            .exchange(HttpRequest.DELETE("/api/v1/namespaces/" + NAMESPACE + "/kv", new ApiDeleteBulkRequest(List.of("my-key"))), ApiDeleteBulkResponse.class);
+            .exchange(HttpRequest.DELETE("/api/v1/main/namespaces/" + NAMESPACE + "/kv", new ApiDeleteBulkRequest(List.of("my-key"))), ApiDeleteBulkResponse.class);
 
         // Then
         Assertions.assertEquals(HttpStatus.OK, response.getStatus());
         Assertions.assertEquals(new ApiDeleteBulkResponse(List.of("my-key")), response.body());
+
+        assertThat(kvStore.exists("my-key")).isFalse();
     }
 
     @Test
-    void shouldReturnSuccessForDeleteBulkOperationGivenNonExistingKeys() {
-        // Given
+    void shouldReturnSuccessForDeleteKeyValueBulkOperationGivenNonExistingKeys() throws IOException {
         // When
         HttpResponse<ApiDeleteBulkResponse> response = client.toBlocking()
-            .exchange(HttpRequest.DELETE("/api/v1/namespaces/" + NAMESPACE + "/kv", new ApiDeleteBulkRequest(List.of("my-key"))), ApiDeleteBulkResponse.class);
+            .exchange(HttpRequest.DELETE("/api/v1/main/namespaces/" + NAMESPACE + "/kv", new ApiDeleteBulkRequest(List.of("my-key"))), ApiDeleteBulkResponse.class);
 
         // Then
         Assertions.assertEquals(HttpStatus.OK, response.getStatus());
         Assertions.assertEquals(new ApiDeleteBulkResponse(List.of()), response.body());
-        assertThat(storageInterface.exists(null, NAMESPACE, toKVUri(NAMESPACE, "my-key")), is(false));
+
+        assertThat(kvStore().exists("my-key")).isFalse();
+        assertThat(storageInterface.exists(MAIN_TENANT, NAMESPACE, toKVUri(NAMESPACE, "my-key"))).isFalse();
     }
 
     @Test
     void illegalKey() {
         String expectedErrorMessage = "Illegal argument: Key must start with an alphanumeric character (uppercase or lowercase) and can contain alphanumeric characters (uppercase or lowercase), dots (.), underscores (_), and hyphens (-) only.";
 
-        HttpClientResponseException httpClientResponseException = Assertions.assertThrows(HttpClientResponseException.class, () -> client.toBlocking().retrieve(HttpRequest.GET("/api/v1/namespaces/" + NAMESPACE + "/kv/bad$key")));
-        assertThat(httpClientResponseException.getStatus().getCode(), is(HttpStatus.UNPROCESSABLE_ENTITY.getCode()));
-        assertThat(httpClientResponseException.getMessage(), Matchers.is(expectedErrorMessage));
+        HttpClientResponseException httpClientResponseException = Assertions
+            .assertThrows(HttpClientResponseException.class, () -> client.toBlocking().retrieve(HttpRequest.GET("/api/v1/main/namespaces/" + NAMESPACE + "/kv/bad$key")));
+        assertThat(httpClientResponseException.getStatus().getCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.getCode());
+        assertThat(httpClientResponseException.getMessage()).isEqualTo(expectedErrorMessage);
 
-        httpClientResponseException = Assertions.assertThrows(HttpClientResponseException.class, () -> client.toBlocking().exchange(HttpRequest.PUT("/api/v1/namespaces/" + NAMESPACE + "/kv/bad$key", "\"content\"").contentType(MediaType.APPLICATION_JSON)));
-        assertThat(httpClientResponseException.getStatus().getCode(), is(HttpStatus.UNPROCESSABLE_ENTITY.getCode()));
-        assertThat(httpClientResponseException.getMessage(), Matchers.is(expectedErrorMessage));
+        httpClientResponseException = Assertions.assertThrows(
+            HttpClientResponseException.class,
+            () -> client.toBlocking().exchange(HttpRequest.PUT("/api/v1/main/namespaces/" + NAMESPACE + "/kv/bad$key", "\"content\"").contentType(MediaType.TEXT_PLAIN))
+        );
+        assertThat(httpClientResponseException.getStatus().getCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.getCode());
+        assertThat(httpClientResponseException.getMessage()).isEqualTo(expectedErrorMessage);
 
-        httpClientResponseException = Assertions.assertThrows(HttpClientResponseException.class, () -> client.toBlocking().retrieve(HttpRequest.DELETE("/api/v1/namespaces/" + NAMESPACE + "/kv/bad$key")));
-        assertThat(httpClientResponseException.getStatus().getCode(), is(HttpStatus.UNPROCESSABLE_ENTITY.getCode()));
-        assertThat(httpClientResponseException.getMessage(), Matchers.is(expectedErrorMessage));
+        httpClientResponseException = Assertions
+            .assertThrows(HttpClientResponseException.class, () -> client.toBlocking().retrieve(HttpRequest.DELETE("/api/v1/main/namespaces/" + NAMESPACE + "/kv/bad$key")));
+        assertThat(httpClientResponseException.getStatus().getCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.getCode());
+        assertThat(httpClientResponseException.getMessage()).isEqualTo(expectedErrorMessage);
+    }
+
+    @Test
+    void jsonFallback() throws IOException, ResourceExpiredException {
+
+        client.toBlocking().exchange(
+            HttpRequest.PUT("/api/v1/main/namespaces/" + NAMESPACE + "/kv/my-key", "1.2.3")
+                .contentType(MediaType.TEXT_PLAIN)
+        );
+
+        KVStore kvStore = kvStore();
+        Object stored = kvStore.getValue("my-key").orElseThrow().value();
+        assertThat(stored).isInstanceOf(String.class);
+        assertThat(stored).isEqualTo("1.2.3");
     }
 
     private URI toKVUri(String namespace, String key) {

@@ -1,19 +1,21 @@
 package io.kestra.plugin.core.condition;
 
+import java.util.List;
+
+import org.junit.jupiter.api.Test;
+
 import com.google.common.collect.ImmutableMap;
+
+import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.models.Label;
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.flows.Flow;
 import io.kestra.core.services.ConditionService;
 import io.kestra.core.utils.TestsUtils;
-import io.kestra.core.junit.annotations.KestraTest;
+
 import jakarta.inject.Inject;
-import org.junit.jupiter.api.Test;
 
-import java.util.List;
-
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import static org.assertj.core.api.Assertions.assertThat;
 
 @KestraTest
 public class ExecutionLabelsTest {
@@ -35,7 +37,7 @@ public class ExecutionLabelsTest {
 
         boolean test = conditionService.isValid(build, flow, execution);
 
-        assertThat(test, is(true));
+        assertThat(test).isTrue();
     }
 
     @Test
@@ -53,7 +55,7 @@ public class ExecutionLabelsTest {
 
         boolean test = conditionService.isValid(build, flow, execution);
 
-        assertThat(test, is(true));
+        assertThat(test).isTrue();
     }
 
     @Test
@@ -68,7 +70,7 @@ public class ExecutionLabelsTest {
 
         boolean test = conditionService.isValid(build, flow, execution);
 
-        assertThat(test, is(false));
+        assertThat(test).isFalse();
     }
 
     @Test
@@ -86,6 +88,6 @@ public class ExecutionLabelsTest {
 
         boolean test = conditionService.isValid(build, flow, execution);
 
-        assertThat(test, is(false));
+        assertThat(test).isFalse();
     }
 }

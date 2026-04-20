@@ -1,5 +1,7 @@
 package io.kestra.core.trace;
 
+import java.util.Optional;
+
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.Attributes;
 import jakarta.inject.Inject;
@@ -13,10 +15,10 @@ import jakarta.inject.Singleton;
 @Singleton
 public class TracerFactory {
     @Inject
-    private OpenTelemetry openTelemetry;
+    private Optional<OpenTelemetry> openTelemetry;
 
     @Inject
-    private io.opentelemetry.api.trace.Tracer tracer;
+    private Optional<io.opentelemetry.api.trace.Tracer> tracer;
 
     @Inject
     private TracesConfiguration tracesConfiguration;
@@ -27,13 +29,21 @@ public class TracerFactory {
     public Tracer getTracer(Class<?> clazz, String spanNamePrefix) {
         TraceLevel level = levelFromConfiguration(clazz.getName());
         Attributes attributes = TraceUtils.attributesFrom(clazz);
-        return level == TraceLevel.DISABLED ? new NoopTracer() : new DefaultTracer(openTelemetry, tracer, spanNamePrefix, level, attributes);
+        return level == TraceLevel.DISABLED || openTelemetry.isEmpty() || tracer.isEmpty() ? new NoopTracer()
+            : new DefaultTracer(openTelemetry.get(), tracer.get(), spanNamePrefix, level, attributes);
+    }
+
+    /**
+     * Get access to the underlying {@link OpenTelemetry} instrumentation for low level usage.
+     */
+    public Optional<OpenTelemetry> getOpenTelemetry() {
+        return openTelemetry;
     }
 
     private TraceLevel levelFromConfiguration(String name) {
         if (name == null) {
             return tracesConfiguration.root();
-        } else if(tracesConfiguration.categories().containsKey(name)) {
+        } else if (tracesConfiguration.categories().containsKey(name)) {
             return tracesConfiguration.categories().get(name);
         } else {
             if (name.contains(".")) {

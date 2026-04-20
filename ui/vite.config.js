@@ -2,31 +2,11 @@ import path from "path";
 import {defineConfig} from "vite";
 import vue from "@vitejs/plugin-vue";
 
-import {filename} from "./plugins/filename"
 import {commit} from "./plugins/commit"
 import {codecovVitePlugin} from "@codecov/vite-plugin";
 
-export const manualChunks = {
-    // bundle dashboard and all its dependencies in a single chunk
-    "dashboard": [
-        "src/components/dashboard/Dashboard.vue",
-        "src/components/dashboard/components/DashboardCreate.vue",
-        "src/override/components/dashboard/components/DashboardEdit.vue"
-    ],
-    // bundle flows and all its dependencies in a second chunk
-    "flows": [
-        "src/components/flows/Flows.vue",
-        "src/components/flows/FlowCreate.vue",
-        "src/components/flows/FlowsSearch.vue",
-        "src/components/flows/FlowRoot.vue"
-    ],
-    "markdownDeps": [
-        "shiki/langs/yaml.mjs",
-        "shiki/langs/python.mjs",
-        "shiki/langs/javascript.mjs",
-        "src/utils/markdownDeps.ts"
-    ]
-}
+const MDC_STUB = path.resolve(__dirname, "node_modules/@kestra-io/ui-libs/stub-mdc-imports.js");
+const NUXTJS_MDC_STUB = path.resolve(__dirname, "plugins/stub-nuxtjs-mdc.js");
 
 export default defineConfig({
     base: "",
@@ -34,20 +14,48 @@ export default defineConfig({
         outDir: "../webserver/src/main/resources/ui",
         rollupOptions: {
             output: {
-                manualChunks
+                codeSplitting: {
+                    groups: [
+                        {
+                            test: /src\/components\/dashboard/i,
+                            name: "dashboard",
+                        },
+                        {
+                            test: /src\/components\/flows/i,
+                            name: "flows",
+                        },
+                        {
+                            test: /(shiki\/langs)|(src\/utils\/markdownDeps)/,
+                            name: "markdownDeps",
+                        },
+                    ],
+                }
             }
-        },
+        }
+    },
+    server: {
+        proxy: {
+            "^/api": {
+                target: "http://localhost:8080",
+                ws: true,
+                changeOrigin: true
+            }
+        }
     },
     resolve: {
-        alias: {
-            "override": path.resolve(__dirname, "src/override/"),
-            "#imports": path.resolve(__dirname, "node_modules/@kestra-io/ui-libs/stub-mdc-imports.js"),
-            "#build/mdc-image-component.mjs": path.resolve(__dirname, "node_modules/@kestra-io/ui-libs/stub-mdc-imports.js"),
-            "#mdc-imports": path.resolve(__dirname, "node_modules/@kestra-io/ui-libs/stub-mdc-imports.js"),
-            "#mdc-configs": path.resolve(__dirname, "node_modules/@kestra-io/ui-libs/stub-mdc-imports.js"),
-            "shiki": path.resolve(__dirname, "node_modules/shiki/dist"),
-            "vuex": path.resolve(__dirname, "node_modules/vuex/dist/vuex.esm-bundler.js"),
-        },
+        alias: [
+            {find: "override", replacement: path.resolve(__dirname, "src/override/")},
+            {find: "kestra-api", replacement: path.resolve(__dirname, "src/generated/kestra-api/")},
+            {find: "#imports", replacement: MDC_STUB},
+            {find: "#build/mdc-image-component.mjs", replacement: MDC_STUB},
+            {find: "#mdc-imports", replacement: MDC_STUB},
+            {find: "#mdc-configs", replacement: MDC_STUB},
+            {find: "@storybook/addon-actions", replacement: "storybook/actions"},
+            // @nuxtjs/mdc is a peer dep of @kestra-io/ui-libs that is not installed here;
+            // all its subpaths are stubbed out to prevent Rolldown from erroring on
+            // unresolved imports (Vite 8 treats them as errors, not warnings).
+            {find: /^@nuxtjs\/mdc(\/.*)?$/, replacement: NUXTJS_MDC_STUB},
+        ],
     },
     plugins: [
         vue({
@@ -59,7 +67,6 @@ export default defineConfig({
                 }
             }
         }),
-        filename(),
         commit(),
         codecovVitePlugin({
             enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,
@@ -73,7 +80,7 @@ export default defineConfig({
         devSourcemap: true,
         preprocessorOptions: {
             scss: {
-                silenceDeprecations: ["mixed-decls", "color-functions", "global-builtin", "import"]
+                silenceDeprecations: ["color-functions", "global-builtin", "if-function", "import"]
             },
         }
     },
@@ -85,7 +92,10 @@ export default defineConfig({
             // without allowing interop in typescript
             "dayjs",
             "debug",
-            "@braintree/sanitize-url"
+            "@braintree/sanitize-url",
+            "monaco-yaml/yaml.worker",
+            "lodash-es",
+            "nprogress"
         ],
         exclude: [
             "* > @kestra-io/ui-libs"

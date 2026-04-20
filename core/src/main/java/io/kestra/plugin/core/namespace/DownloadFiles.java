@@ -1,5 +1,14 @@
 package io.kestra.plugin.core.namespace;
 
+import java.io.InputStream;
+import java.net.URI;
+import java.util.AbstractMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+import org.slf4j.Logger;
+
 import io.kestra.core.models.annotations.Example;
 import io.kestra.core.models.annotations.Plugin;
 import io.kestra.core.models.annotations.PluginProperty;
@@ -11,6 +20,7 @@ import io.kestra.core.runners.RunContext;
 import io.kestra.core.storages.Namespace;
 import io.kestra.core.utils.PathMatcherPredicate;
 import io.kestra.core.utils.Rethrow;
+
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import lombok.Builder;
@@ -18,22 +28,19 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.Logger;
 
-import java.io.InputStream;
-import java.net.URI;
-import java.util.AbstractMap;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
+import static io.kestra.core.storages.NamespaceFile.toLogicalPath;
 
 @Slf4j
 @SuperBuilder
 @Getter
 @NoArgsConstructor
 @Schema(
-    title = "Download one or multiple files from your namespace files.",
-    description = "Use a regex glob pattern or a file path to download files from your namespace files. This can be useful to share code between projects and teams, which is located in different namespaces."
+    title = "Download files from Namespace storage.",
+    description = """
+        Fetches files from a Namespace using file paths or glob patterns, storing them into the current working storage with preserved relative paths. Useful for sharing assets across Namespaces.
+
+        `files` accepts a string or list (globs allowed); `destination` prefixes the output location."""
 )
 @Plugin(
     examples = {
@@ -42,15 +49,15 @@ import java.util.stream.Collectors;
             full = true,
             code = {
                 """
-                id: download_file
-                namespace: company.team
-                tasks:
-                  - id: download
-                    type: io.kestra.plugin.core.namespace.DownloadFiles
-                    namespace: tutorial
-                    files:
-                      - "**input.txt"
-                """
+                    id: download_file
+                    namespace: company.team
+                    tasks:
+                      - id: download
+                        type: io.kestra.plugin.core.namespace.DownloadFiles
+                        namespace: tutorial
+                        files:
+                          - "**input.txt"
+                    """
             }
         ),
         @Example(
@@ -58,15 +65,15 @@ import java.util.stream.Collectors;
             full = true,
             code = {
                 """
-                id: download_all_files
-                namespace: company.team
-                tasks:
-                  - id: download
-                    type: io.kestra.plugin.core.namespace.DownloadFiles
-                    namespace: tutorial
-                    files:
-                      - "**"
-                """
+                    id: download_all_files
+                    namespace: company.team
+                    tasks:
+                      - id: download
+                        type: io.kestra.plugin.core.namespace.DownloadFiles
+                        namespace: tutorial
+                        files:
+                          - "**"
+                    """
             }
         )
     }
@@ -74,15 +81,15 @@ import java.util.stream.Collectors;
 public class DownloadFiles extends Task implements RunnableTask<DownloadFiles.Output> {
     @NotNull
     @Schema(
-        title = "The namespace from which you want to download files."
+        title = "The namespace from which you want to download files"
     )
     private Property<String> namespace;
 
     @NotNull
     @Schema(
-        title = "A file or a list of files from the given namespace.",
+        title = "A file or a list of files from the given namespace",
         description = "String or a list of strings; each string can either be a regex glob pattern or a file path URI.",
-        anyOf = {List.class, String.class}
+        anyOf = { List.class, String.class }
     )
     @PluginProperty(dynamic = true)
     private Object files;
@@ -91,8 +98,7 @@ public class DownloadFiles extends Task implements RunnableTask<DownloadFiles.Ou
         title = "The folder where the downloaded files will be stored"
     )
     @Builder.Default
-    private Property<String> destination = Property.of("");
-
+    private Property<String> destination = Property.ofValue("");
 
     @Override
     @SuppressWarnings("unchecked")
@@ -109,16 +115,17 @@ public class DownloadFiles extends Task implements RunnableTask<DownloadFiles.Ou
         } else if (files instanceof List<?> filesList) {
             renderedFiles = runContext.render((List<String>) filesList);
         } else {
-            throw new IllegalArgumentException("The files property must be a string or a list of strings");
+            throw new IllegalArgumentException("The files property must be a string or a list of strings.");
         }
 
         Map<String, URI> downloaded = namespace.findAllFilesMatching(PathMatcherPredicate.matches(renderedFiles))
             .stream()
-            .map(Rethrow.throwFunction(file -> {
+            .map(Rethrow.throwFunction(file ->
+            {
                 try (InputStream is = runContext.storage().getFile(file.uri())) {
                     URI uri = runContext.storage().putFile(is, renderedDestination + file.path());
                     logger.debug(String.format("Downloaded %s", uri));
-                    return new AbstractMap.SimpleEntry<>(file.path(true).toString(), uri);
+                    return new AbstractMap.SimpleEntry<>(toLogicalPath(file.filePath()), uri);
                 }
             }))
             .collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue));
@@ -130,7 +137,7 @@ public class DownloadFiles extends Task implements RunnableTask<DownloadFiles.Ou
     @Getter
     public static class Output implements io.kestra.core.models.tasks.Output {
         @Schema(
-            title = "Downloaded files.",
+            title = "Downloaded files",
             description = "The task returns a map containing the file path as a key and the file URI as a value."
         )
         private final Map<String, URI> files;

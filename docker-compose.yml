@@ -6,9 +6,9 @@ volumes:
 
 services:
   postgres:
-    image: postgres
+    image: postgres:18
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
     environment:
       POSTGRES_DB: kestra
       POSTGRES_USER: kestra
@@ -22,9 +22,10 @@ services:
   kestra:
     image: kestra/kestra:latest
     pull_policy: always
+    # Kestra, by default, has a termination grace period of 5m. We need to wait a little more to be sure no active tasks are running.
+    stop_grace_period: 6m
     # Note that this setup with a root user is intended for development purpose.
     # Our base image runs without root, but the Docker Compose implementation needs root to access the Docker socket
-    # To run Kestra in a rootless mode in production, see: https://kestra.io/docs/installation/podman-compose
     user: "root"
     command: server standalone
     volumes:
@@ -40,21 +41,20 @@ services:
             username: kestra
             password: k3str4
         kestra:
-          server:
-            basicAuth:
-              enabled: false
-              username: "admin@localhost.dev" # it must be a valid email address
-              password: kestra
+          # server:
+          #   basic-auth:
+          #     username: admin@kestra.io # it must be a valid email address
+          #     password: Admin1234! # it must be at least 8 characters long with uppercase letter and a number
           repository:
             type: postgres
           storage:
             type: local
             local:
-              basePath: "/app/storage"
+              base-path: "/app/storage"
           queue:
             type: postgres
           tasks:
-            tmpDir:
+            tmp-dir:
               path: /tmp/kestra-wd/tmp
           url: http://localhost:8080/
     ports:

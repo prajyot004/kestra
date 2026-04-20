@@ -1,27 +1,32 @@
 package io.kestra.core.models.executions;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-import io.kestra.core.models.DeletedInterface;
-import io.kestra.core.models.TenantInterface;
-import io.kestra.core.models.flows.Flow;
-import io.kestra.core.models.triggers.AbstractTrigger;
-import io.kestra.core.models.triggers.TriggerContext;
-import io.micronaut.core.annotation.Nullable;
-import io.swagger.v3.oas.annotations.Hidden;
-import lombok.Builder;
-import lombok.Value;
-import org.slf4j.event.Level;
-
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Pattern;
 import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import org.apache.commons.lang3.StringUtils;
+import org.slf4j.event.Level;
+
+import com.fasterxml.jackson.annotation.JsonInclude;
+
+import io.kestra.core.models.TenantInterface;
+import io.kestra.core.models.flows.FlowId;
+import io.kestra.core.models.triggers.AbstractTrigger;
+import io.kestra.core.models.triggers.TriggerId;
+import io.kestra.core.queues.event.DispatchEvent;
+import io.kestra.core.utils.IdUtils;
+
+import io.swagger.v3.oas.annotations.Hidden;
+import jakarta.annotation.Nullable;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import lombok.Builder;
+import lombok.Value;
+
 @Value
 @Builder(toBuilder = true)
-public class LogEntry implements DeletedInterface, TenantInterface {
+public class LogEntry implements TenantInterface, DispatchEvent {
     @Hidden
     @Pattern(regexp = "^[a-z0-9][a-z0-9_-]*")
     String tenantId;
@@ -56,9 +61,8 @@ public class LogEntry implements DeletedInterface, TenantInterface {
 
     String message;
 
-    @NotNull
-    @Builder.Default
-    boolean deleted = false;
+    @Nullable
+    ExecutionKind executionKind;
 
     public static List<Level> findLevelsByMin(Level minLevel) {
         if (minLevel == null) {
@@ -76,10 +80,11 @@ public class LogEntry implements DeletedInterface, TenantInterface {
             .namespace(execution.getNamespace())
             .flowId(execution.getFlowId())
             .executionId(execution.getId())
+            .executionKind(execution.getKind())
             .build();
     }
 
-    public static LogEntry of(TaskRun taskRun) {
+    public static LogEntry of(TaskRun taskRun, ExecutionKind executionKind) {
         return LogEntry.builder()
             .tenantId(taskRun.getTenantId())
             .namespace(taskRun.getNamespace())
@@ -88,29 +93,42 @@ public class LogEntry implements DeletedInterface, TenantInterface {
             .executionId(taskRun.getExecutionId())
             .taskRunId(taskRun.getId())
             .attemptNumber(taskRun.attemptNumber())
+            .executionKind(executionKind)
             .build();
     }
 
-    public static LogEntry of(Flow flow, AbstractTrigger abstractTrigger) {
+    public static LogEntry of(FlowId flow, AbstractTrigger abstractTrigger) {
         return LogEntry.builder()
             .tenantId(flow.getTenantId())
             .namespace(flow.getNamespace())
             .flowId(flow.getId())
             .triggerId(abstractTrigger.getId())
+            .executionId(abstractTrigger.getId())
             .build();
     }
 
-    public static LogEntry of(TriggerContext triggerContext, AbstractTrigger abstractTrigger) {
+    public static LogEntry of(TriggerId trigger, AbstractTrigger abstractTrigger) {
         return LogEntry.builder()
-            .tenantId(triggerContext.getTenantId())
-            .namespace(triggerContext.getNamespace())
-            .flowId(triggerContext.getFlowId())
+            .tenantId(trigger.getTenantId())
+            .namespace(trigger.getNamespace())
+            .flowId(trigger.getFlowId())
             .triggerId(abstractTrigger.getId())
+            .executionId(abstractTrigger.getId())
             .build();
     }
 
     public static String toPrettyString(LogEntry logEntry) {
         return logEntry.getTimestamp().toString() + " " + logEntry.getLevel() + " " + logEntry.getMessage();
+    }
+
+    public static String toPrettyString(LogEntry logEntry, Integer maxMessageSize) {
+        String message;
+        if (maxMessageSize != null && maxMessageSize > 0) {
+            message = StringUtils.truncate(logEntry.getMessage(), maxMessageSize);
+        } else {
+            message = logEntry.getMessage();
+        }
+        return logEntry.getTimestamp().toString() + " " + logEntry.getLevel() + " " + message;
     }
 
     public Map<String, String> toMap() {
@@ -122,7 +140,8 @@ public class LogEntry implements DeletedInterface, TenantInterface {
                 new AbstractMap.SimpleEntry<>("taskId", this.taskId),
                 new AbstractMap.SimpleEntry<>("executionId", this.executionId),
                 new AbstractMap.SimpleEntry<>("taskRunId", this.taskRunId),
-                new AbstractMap.SimpleEntry<>("triggerId", this.triggerId)
+                new AbstractMap.SimpleEntry<>("triggerId", this.triggerId),
+                new AbstractMap.SimpleEntry<>("executionKind", Optional.ofNullable(this.executionKind).map(executionKind -> executionKind.name()).orElse(null))
             )
             .filter(e -> e.getValue() != null)
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
@@ -136,4 +155,9 @@ public class LogEntry implements DeletedInterface, TenantInterface {
         return map;
     }
 
+    @Override
+    public String key() {
+        // FIXME should we return null instead?
+        return IdUtils.create();
+    }
 }

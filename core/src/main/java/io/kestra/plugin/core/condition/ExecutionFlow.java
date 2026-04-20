@@ -2,19 +2,20 @@ package io.kestra.plugin.core.condition;
 
 import io.kestra.core.exceptions.IllegalConditionEvaluation;
 import io.kestra.core.exceptions.InternalException;
-import io.kestra.core.models.annotations.PluginProperty;
+import io.kestra.core.models.annotations.Example;
+import io.kestra.core.models.annotations.Plugin;
+import io.kestra.core.models.conditions.Condition;
+import io.kestra.core.models.conditions.ConditionContext;
+import io.kestra.core.models.property.Property;
+import io.kestra.core.runners.RunContext;
+
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.NotNull;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
 import lombok.experimental.SuperBuilder;
-import io.kestra.core.models.annotations.Example;
-import io.kestra.core.models.annotations.Plugin;
-import io.kestra.core.models.conditions.Condition;
-import io.kestra.core.models.conditions.ConditionContext;
-
-import jakarta.validation.constraints.NotNull;
 
 @SuperBuilder
 @ToString
@@ -22,7 +23,11 @@ import jakarta.validation.constraints.NotNull;
 @Getter
 @NoArgsConstructor
 @Schema(
-    title = "Condition for a specific flow of an execution."
+    title = "Match events from a specific flow.",
+    description = """
+        Passes only when the triggering execution belongs to the given Namespace and Flow ID.
+
+        Pair with the Flow trigger to react to a single upstream flow; for broader namespace matching use `ExecutionNamespace`."""
 )
 @Plugin(
     examples = {
@@ -32,12 +37,12 @@ import jakarta.validation.constraints.NotNull;
             code = """
                 id: flow_condition_executionflow
                 namespace: company.team
-                
+
                 tasks:
                   - id: hello
                     type: io.kestra.plugin.core.log.Log
                     message: "This flow will execute when flow `flow_a` of namespace `company.team` enters RUNNING state."
-                
+
                 triggers:
                   - id: flow_trigger
                     type: io.kestra.plugin.core.trigger.Flow
@@ -50,18 +55,16 @@ import jakarta.validation.constraints.NotNull;
                 """
         )
     },
-    aliases = {"io.kestra.core.models.conditions.types.ExecutionFlowCondition", "io.kestra.plugin.core.condition.ExecutionFlowCondition"}
+    aliases = { "io.kestra.core.models.conditions.types.ExecutionFlowCondition", "io.kestra.plugin.core.condition.ExecutionFlowCondition" }
 )
 public class ExecutionFlow extends Condition {
     @NotNull
-    @Schema(title = "The namespace of the flow.")
-    @PluginProperty
-    private String namespace;
+    @Schema(title = "The Flow Namespace")
+    private Property<String> namespace;
 
     @NotNull
-    @Schema(title = "The flow id.")
-    @PluginProperty
-    private String flowId;
+    @Schema(title = "The Flow ID")
+    private Property<String> flowId;
 
     @Override
     public boolean test(ConditionContext conditionContext) throws InternalException {
@@ -69,6 +72,8 @@ public class ExecutionFlow extends Condition {
             throw new IllegalConditionEvaluation("Invalid condition with null execution");
         }
 
-        return conditionContext.getExecution().getNamespace().equals(this.namespace) && conditionContext.getExecution().getFlowId().equals(this.flowId);
+        RunContext runContext = conditionContext.getRunContext();
+        return conditionContext.getExecution().getNamespace().equals(runContext.render(this.namespace).as(String.class, conditionContext.getVariables()).orElseThrow())
+            && conditionContext.getExecution().getFlowId().equals(runContext.render(this.flowId).as(String.class, conditionContext.getVariables()).orElseThrow());
     }
 }

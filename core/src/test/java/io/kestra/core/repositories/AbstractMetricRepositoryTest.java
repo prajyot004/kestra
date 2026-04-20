@@ -1,50 +1,65 @@
 package io.kestra.core.repositories;
 
+import java.io.IOException;
+import java.time.Duration;
+import java.time.ZonedDateTime;
+import java.util.List;
+import java.util.Map;
+
+import org.junit.jupiter.api.Test;
+
 import com.devskiller.friendly_id.FriendlyId;
+
+import io.kestra.core.models.dashboards.AggregationType;
+import io.kestra.core.models.dashboards.ColumnDescriptor;
+import io.kestra.core.models.executions.Execution;
+import io.kestra.core.models.executions.ExecutionKind;
 import io.kestra.core.models.executions.MetricEntry;
 import io.kestra.core.models.executions.TaskRun;
 import io.kestra.core.models.executions.metrics.Counter;
 import io.kestra.core.models.executions.metrics.MetricAggregations;
 import io.kestra.core.models.executions.metrics.Timer;
+import io.kestra.core.utils.TestsUtils;
+import io.kestra.plugin.core.dashboard.data.Metrics;
+import io.kestra.plugin.core.dashboard.data.MetricsKPI;
+
 import io.micronaut.data.model.Pageable;
-import io.kestra.core.junit.annotations.KestraTest;
+import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
-import org.junit.jupiter.api.Disabled;
-import org.junit.jupiter.api.Test;
 
-import java.time.Duration;
-import java.time.ZonedDateTime;
-import java.util.List;
+import static org.assertj.core.api.Assertions.assertThat;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
-
-@KestraTest
+@MicronautTest
 public abstract class AbstractMetricRepositoryTest {
     @Inject
     protected MetricRepositoryInterface metricRepository;
 
     @Test
     void all() {
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
         String executionId = FriendlyId.createFriendlyId();
-        TaskRun taskRun1 = taskRun(executionId, "task");
-        MetricEntry counter = MetricEntry.of(taskRun1, counter("counter"));
-        TaskRun taskRun2 = taskRun(executionId, "task");
-        MetricEntry timer = MetricEntry.of(taskRun2, timer());
+        TaskRun taskRun1 = taskRun(tenant, executionId, "task");
+        MetricEntry counter = MetricEntry.of(taskRun1, counter("counter"), null);
+        MetricEntry testCounter = MetricEntry.of(taskRun1, counter("test"), ExecutionKind.TEST);
+        MetricEntry normalCounter = MetricEntry.of(taskRun1, counter("normal"), ExecutionKind.NORMAL);
+        TaskRun taskRun2 = taskRun(tenant, executionId, "task");
+        MetricEntry timer = MetricEntry.of(taskRun2, timer(), null);
         metricRepository.save(counter);
+        metricRepository.save(testCounter); // should only be retrieved by execution id
+        metricRepository.save(normalCounter);
         metricRepository.save(timer);
 
-        List<MetricEntry> results = metricRepository.findByExecutionId(null, executionId, Pageable.from(1, 10));
-        assertThat(results.size(), is(2));
+        List<MetricEntry> results = metricRepository.findByExecutionId(tenant, executionId, Pageable.from(1, 10));
+        assertThat(results.size()).isEqualTo(4);
 
-        results = metricRepository.findByExecutionIdAndTaskId(null, executionId, taskRun1.getTaskId(), Pageable.from(1, 10));
-        assertThat(results.size(), is(2));
+        results = metricRepository.findByExecutionIdAndTaskId(tenant, executionId, taskRun1.getTaskId(), Pageable.from(1, 10));
+        assertThat(results.size()).isEqualTo(4);
 
-        results = metricRepository.findByExecutionIdAndTaskRunId(null, executionId, taskRun1.getId(), Pageable.from(1, 10));
-        assertThat(results.size(), is(1));
+        results = metricRepository.findByExecutionIdAndTaskRunId(tenant, executionId, taskRun1.getId(), Pageable.from(1, 10));
+        assertThat(results.size()).isEqualTo(3);
 
         MetricAggregations aggregationResults = metricRepository.aggregateByFlowId(
-            null,
+            tenant,
             "namespace",
             "flow",
             null,
@@ -54,11 +69,11 @@ public abstract class AbstractMetricRepositoryTest {
             "sum"
         );
 
-        assertThat(aggregationResults.getAggregations().size(), is(31));
-        assertThat(aggregationResults.getGroupBy(), is("day"));
+        assertThat(aggregationResults.getAggregations().size()).isEqualTo(31);
+        assertThat(aggregationResults.getGroupBy()).isEqualTo("day");
 
         aggregationResults = metricRepository.aggregateByFlowId(
-            null,
+            tenant,
             "namespace",
             "flow",
             null,
@@ -68,32 +83,112 @@ public abstract class AbstractMetricRepositoryTest {
             "sum"
         );
 
-        assertThat(aggregationResults.getAggregations().size(), is(27));
-        assertThat(aggregationResults.getGroupBy(), is("week"));
+        assertThat(aggregationResults.getAggregations().size()).isEqualTo(27);
+        assertThat(aggregationResults.getGroupBy()).isEqualTo("week");
 
     }
 
-     @Test
-     void names() {
-         String executionId = FriendlyId.createFriendlyId();
-         TaskRun taskRun1 = taskRun(executionId, "task");
-         MetricEntry counter = MetricEntry.of(taskRun1, counter("counter"));
+    @Test
+    void names() {
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        String executionId = FriendlyId.createFriendlyId();
+        TaskRun taskRun1 = taskRun(tenant, executionId, "task");
+        MetricEntry counter = MetricEntry.of(taskRun1, counter("counter"), null);
 
-         TaskRun taskRun2 = taskRun(executionId, "task2");
-         MetricEntry counter2 = MetricEntry.of(taskRun2, counter("counter2"));
+        TaskRun taskRun2 = taskRun(tenant, executionId, "task2");
+        MetricEntry counter2 = MetricEntry.of(taskRun2, counter("counter2"), null);
 
-         metricRepository.save(counter);
-         metricRepository.save(counter2);
+        MetricEntry test = MetricEntry.of(taskRun2, counter("test"), ExecutionKind.TEST);
 
+        metricRepository.save(counter);
+        metricRepository.save(counter2);
+        metricRepository.save(test); // should only be retrieved by execution id
 
-         List<String> flowMetricsNames = metricRepository.flowMetrics(null, "namespace", "flow");
-         List<String> taskMetricsNames = metricRepository.taskMetrics(null, "namespace", "flow", "task");
-         List<String> tasksWithMetrics = metricRepository.tasksWithMetrics(null, "namespace", "flow");
+        List<String> flowMetricsNames = metricRepository.flowMetrics(tenant, "namespace", "flow");
+        List<String> taskMetricsNames = metricRepository.taskMetrics(tenant, "namespace", "flow", "task");
+        List<String> tasksWithMetrics = metricRepository.tasksWithMetrics(tenant, "namespace", "flow");
 
-         assertThat(flowMetricsNames.size(), is(2));
-         assertThat(taskMetricsNames.size(), is(1));
-         assertThat(tasksWithMetrics.size(), is(2));
-     }
+        assertThat(flowMetricsNames.size()).isEqualTo(2);
+        assertThat(taskMetricsNames.size()).isEqualTo(1);
+        assertThat(tasksWithMetrics.size()).isEqualTo(2);
+    }
+
+    @Test
+    void findAllAsync() {
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        String executionId = FriendlyId.createFriendlyId();
+        TaskRun taskRun1 = taskRun(tenant, executionId, "task");
+        MetricEntry counter = MetricEntry.of(taskRun1, counter("counter"), null);
+        TaskRun taskRun2 = taskRun(tenant, executionId, "task");
+        MetricEntry timer = MetricEntry.of(taskRun2, timer(), null);
+        MetricEntry test = MetricEntry.of(taskRun2, counter("test"), ExecutionKind.TEST);
+        metricRepository.save(counter);
+        metricRepository.save(timer);
+        metricRepository.save(test); // should be retrieved as findAllAsync is used for backup
+
+        List<MetricEntry> results = metricRepository.findAllAsync(tenant).collectList().block();
+        assertThat(results).hasSize(3);
+    }
+
+    @Test
+    void purge() {
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        metricRepository.save(MetricEntry.of(taskRun(tenant, "execution1", "task"), counter("counter1"), null));
+        metricRepository.save(MetricEntry.of(taskRun(tenant, "execution1", "task"), counter("counter2"), null));
+        metricRepository.save(MetricEntry.of(taskRun(tenant, "execution2", "task"), counter("counter1"), null));
+        metricRepository.save(MetricEntry.of(taskRun(tenant, "execution2", "task"), counter("counter2"), null));
+
+        var result = metricRepository.purge(List.of(Execution.builder().id("execution1").build(), Execution.builder().id("execution2").build()));
+        assertThat(result).isEqualTo(4);
+    }
+
+    @Test
+    protected void fetchData() throws IOException {
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        String executionId = FriendlyId.createFriendlyId();
+        TaskRun taskRun1 = taskRun(tenant, executionId, "task");
+        MetricEntry counter = MetricEntry.of(taskRun1, counter("counter"), null);
+        MetricEntry testCounter = MetricEntry.of(taskRun1, counter("test"), ExecutionKind.TEST);
+        metricRepository.save(counter);
+        metricRepository.save(testCounter);
+
+        var results = metricRepository.fetchData(
+            tenant,
+            Metrics.builder().type(Metrics.class.getName()).columns(
+                Map.of(
+                    "count", ColumnDescriptor.<Metrics.Fields> builder().field(Metrics.Fields.EXECUTION_ID).agg(AggregationType.COUNT).build()
+                )
+            ).build(),
+            null,
+            null,
+            Pageable.UNPAGED
+        );
+
+        assertThat(results).hasSize(1);
+        assertThat(results.getFirst().get("count")).isIn(1, 1L); // JDBC return an int but ES a long
+    }
+
+    @Test
+    protected void fetchValue() throws IOException {
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        String executionId = FriendlyId.createFriendlyId();
+        TaskRun taskRun1 = taskRun(tenant, executionId, "task");
+        MetricEntry counter = MetricEntry.of(taskRun1, counter("counter"), null);
+        MetricEntry testCounter = MetricEntry.of(taskRun1, counter("test"), ExecutionKind.TEST);
+        metricRepository.save(counter);
+        metricRepository.save(testCounter);
+
+        var results = metricRepository.fetchValue(
+            tenant,
+            MetricsKPI.builder().type(MetricsKPI.class.getName()).columns(ColumnDescriptor.<Metrics.Fields> builder().field(Metrics.Fields.EXECUTION_ID).agg(AggregationType.COUNT).build())
+                .build(),
+            null,
+            null,
+            false
+        );
+
+        assertThat(results).isEqualTo(1.0);
+    }
 
     private Counter counter(String metricName) {
         return Counter.of(metricName, 1);
@@ -103,8 +198,9 @@ public abstract class AbstractMetricRepositoryTest {
         return Timer.of("counter", Duration.ofSeconds(5));
     }
 
-    private TaskRun taskRun(String executionId, String taskId) {
+    private TaskRun taskRun(String tenantId, String executionId, String taskId) {
         return TaskRun.builder()
+            .tenantId(tenantId)
             .flowId("flow")
             .namespace("namespace")
             .executionId(executionId)

@@ -1,17 +1,17 @@
 package io.kestra.cli.listeners;
 
-import io.micronaut.context.ApplicationContext;
-import io.micronaut.context.env.Environment;
-import io.micronaut.context.env.MapPropertySource;
-import org.junit.jupiter.api.Test;
-
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.Map;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import org.junit.jupiter.api.Test;
+
+import io.micronaut.context.ApplicationContext;
+import io.micronaut.context.env.Environment;
+import io.micronaut.context.env.MapPropertySource;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 class DeleteConfigurationApplicationListenersTest {
 
@@ -28,7 +28,7 @@ class DeleteConfigurationApplicationListenersTest {
         );
 
         try (ApplicationContext ctx = ApplicationContext.run(mapPropertySource, Environment.CLI, Environment.TEST)) {
-            assertThat(tempFile.exists(), is(false));
+            assertThat(tempFile.exists()).isFalse();
         }
     }
 }

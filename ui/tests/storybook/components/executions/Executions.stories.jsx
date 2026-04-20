@@ -1,35 +1,38 @@
-import {useStore} from "vuex";
 import {vueRouter} from "storybook-vue3-router";
 import Executions from "../../../../src/components/executions/Executions.vue";
+import {useMiscStore} from "override/stores/misc";
+import {useAuthStore} from "override/stores/auth";
 import fixture from "./Executions.fixture.json"
 import fixtureS from "./Executions-s.fixture.json"
+import {useAxios} from "../../../../src/utils/axios";
 
 function getDecorators(data) {
     return [
         () => {
             return {
                 setup () {
-                    const store = useStore()
-                    store.commit("auth/setUser", {
+                    const authStore = useAuthStore()
+                    const miscStore = useMiscStore()
+
+                    authStore.user = {
                         id: "123",
                         firstName: "John",
                         lastName: "Doe",
                         email: "john.doe@example.com",
                         isAllowed: () => true,
                         hasAnyActionOnAnyNamespace: () => true,
-                    })
-                    store.commit("misc/setConfigs", {
+                    }
+                    miscStore.configs = {
                         hiddenLabelsPrefixes: ["system_"]
-                    })
-                    store.$http = {
-                        get(a) {
-                            if (a.endsWith("executions/search")) {
-                                return Promise.resolve({
-                                    data 
-                                })
-                            }
-                            return Promise.resolve({data: []})
-                        },
+                    }
+                    const axios = useAxios()
+                    axios.get = function(a) {
+                        if (a.endsWith("executions/search")) {
+                            return Promise.resolve({
+                                data
+                            })
+                        }
+                        return Promise.resolve({data: []})
                     }
                 },
                 template: "<div style='margin:2rem'><story /></div>"
@@ -39,21 +42,21 @@ function getDecorators(data) {
         {
             path: "/",
             name: "home",
-            component: {template: "div>home</div>"}
+            component: {template: "<div>home</div>"}
         },
           {
             path: "/flows/update/:namespace/:id?/:flowId?",
             name: "flows/update",
-            component: {template: "div>updateflows</div>"}
+            component: {template: "<div>updateflows</div>"}
           },{
             path: "/executions/update/:namespace/:id?/:flowId?",
             name: "executions/update",
-            component: {template: "div>executions</div>"}
+            component: {template: "<div>executions</div>"}
           },
           {
             path: "/executions/:id?/:flowId?",
             name: "executions/list",
-            component: {template: "div>executions</div>"}
+            component: {template: "<div>executions</div>"}
           }
         ], {
             initialRoute: "/executions/123/645"

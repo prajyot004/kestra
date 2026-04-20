@@ -1,83 +1,93 @@
 <template>
     <div class="docsMenuWrapper">
-        <el-button @click="menuOpen = !menuOpen" class="menuOpener">
-            {{ t("documentationMenu") }} <MenuDown class="expandIcon" />
+        <el-button
+            @click="menuOpen = !menuOpen"
+            class="menuOpener"
+            :class="{'is-open': menuOpen}"
+        >
+            {{ $t("documentationMenu") }}
+            <ChevronDown
+                class="expandIcon"
+                :class="{'rotate-icon': menuOpen}"
+            />
         </el-button>
-        <ul v-if="menuOpen" class="docsMenu list-unstyled d-flex flex-column gap-3">
-            <template v-if="rawStructure">
-                <li v-for="[sectionName, children] in sectionsWithChildren" :key="sectionName">
-                    <span class="text-secondary">
-                        {{ sectionName.toUpperCase() }}
-                    </span>
-                    <recursive-toc :parent="{children}">
-                        <template #default="{path, title}">
-                            <context-docs-link @click="menuOpen = false" :href="path.slice(5)" use-raw>
-                                {{ title.capitalize() }}
-                            </context-docs-link>
-                        </template>
-                    </recursive-toc>
+        <div v-if="menuOpen" class="docsMenuContainer">
+            <ul class="docsMenu list-unstyled d-flex flex-column m-0">
+                <template v-if="rawStructure">
+                    <li
+                        v-for="{section, children} in sectionsWithChildren"
+                        :key="section"
+                        :class="{'active-section': isCurrentSection(section)}"
+                    >
+                        <span class="text-secondary">
+                            {{ section.toUpperCase() }}
+                        </span>
+                        <RecursiveToc :parent="{children: children ?? []}">
+                            <template #default="{path, sidebarTitle, title, class: childClass}">
+                                <ContextDocsLink
+                                    :href="path"
+                                    useRaw
+                                    :class="[{'active-page': isCurrentPage(path)}, childClass]"
+                                    @click="menuOpen = false"
+                                >
+                                    {{ (sidebarTitle ?? title).capitalize() }}
+                                </ContextDocsLink>
+                            </template>
+                        </RecursiveToc>
+                    </li>
+                </template>
+                <li v-else>
+                    Loading Menu...
                 </li>
-            </template>
-            <li v-else>
-                Loading Menu...
-            </li>
-        </ul>
+            </ul>
+        </div>
     </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
     import {ref, computed, watch} from "vue";
-    import {useStore} from "vuex";
-    import {useI18n} from "vue-i18n";
+    import {useDocStore} from "../../stores/doc";
+    import {SECTIONS} from "./docsUtils";
 
-    const {t} = useI18n({useScope: "global"});
-
-    import MenuDown from "vue-material-design-icons/MenuDown.vue";
+    import ChevronDown from "vue-material-design-icons/ChevronDown.vue";
 
     import RecursiveToc from "./RecursiveToc.vue";
     import ContextDocsLink from "./ContextDocsLink.vue";
 
-    const store = useStore();
+    const docStore = useDocStore();
 
     const menuOpen = ref(false);
 
-    const SECTIONS = {
-        "Get Started with Kestra": [
-            "Getting Started",
-            "Tutorial",
-            "Architecture",
-            "Installation Guide",
-            "User Interface"
-        ],
-        "Build with Kestra": [
-            "Concepts",
-            "Workflow Components",
-            "Expressions",
-            "Version Control & CI/CD",
-            "Plugin Developer Guide",
-            "How-to Guides"
-        ],
-        "Scale with Kestra": [
-            "Enterprise Edition",
-            "Task Runners",
-            "Best Practices"
-        ],
-        "Manage Kestra": [
-            "Administrator Guide",
-            "Configuration Guide",
-            "Migration Guide",
-            "Terraform Provider",
-            "API Reference"
-        ]
-    }
 
-    const rawStructure = ref(undefined);
+    const rawStructure = ref<Record<string, any> | undefined>();
+    const currentDocPath = computed(() => docStore.docPath);
+
+    const normalizePath = (path: string) => {
+        if (!path) return "";
+        return path.replace(/^docs\//, "").replace(/^\/+|\/+$/g, "");
+    };
+
+    const isCurrentPage = (path: string) => {
+        if (!currentDocPath.value || !path) return false;
+        const normalizedCurrent = normalizePath(currentDocPath.value);
+        const normalizedPath = normalizePath(path);
+
+        if (normalizedCurrent === normalizedPath) return true;
+
+        if (normalizedCurrent.startsWith(normalizedPath + "/")) return true;
+
+        return false;
+    };
+
+    const isCurrentSection = (sectionName: string) => {
+        if (!currentDocPath.value) return false;
+        const sectionChildren = sectionsWithChildren.value?.find(({section}) => section === sectionName)?.children || [];
+        return sectionChildren.some(child => isCurrentPage(child.path));
+    };
 
     watch(menuOpen, async (val) => {
-        if(!val || rawStructure.value !== undefined){
-            return;
-        }
-        rawStructure.value = await store.dispatch("doc/children");
+        if(!val || rawStructure.value !== undefined) return;
+        rawStructure.value = await docStore.children();
     });
 
     const toc = computed(() => {
@@ -86,14 +96,17 @@
         }
 
         const childrenWithMetadata = Object.entries(rawStructure.value)
-            .reduce((acc, [url, metadata]) => {
+            .filter(([p]) => p.startsWith("docs/") && !p.endsWith(".png") && !p.endsWith(".svg"))
+            .reduce((acc: Record<string, any>, [url, metadata]) => {
                 if(!metadata || metadata.hideSidebar){
                     return acc;
                 }
 
-                acc[url] = {
+                const cleanUrl = url.replace(/\/index\.mdx?$/, "").replace(/\.mdx?$/, "");
+
+                acc[cleanUrl] = {
                     ...metadata,
-                    path: url
+                    path: cleanUrl
                 };
 
                 return acc
@@ -109,45 +122,170 @@
             }
         }
 
-        return Object.entries(childrenWithMetadata)[0]?.[1]?.children;
+        return Object.values(childrenWithMetadata) as {path: string, title: string, sidebarTitle: string, children: any[]}[];
     })
 
-    const sectionsWithChildren = computed(() => {
-        if (toc.value === undefined) {
-            return undefined;
-        }
-
-        return Object.entries(SECTIONS).map(([section, childrenTitles]) => [section, toc.value.filter(({title}) => childrenTitles.includes(title))]);
-    });
+    const sectionsWithChildren = computed(() => Object.entries(SECTIONS)
+        .map(([section, childrenTitles]) => ({
+            section,
+            children: childrenTitles
+                .map(name => toc.value?.find(({title, sidebarTitle, path}) =>
+                    path.split("/").length === 2 && (sidebarTitle === name || title === name)
+                ))
+                .filter((item): item is NonNullable<typeof item> => !!item)
+        }))
+    )
 </script>
 
-<style lang="scss" scoped>
-    ul > li > span:first-child {
-        font-size: 12px;
+<style scoped lang="scss">
+    $scrollbar-width: 6px;
+    $link-radius: 6px;
+    $transition-timing: cubic-bezier(0.16, 1, 0.3, 1);
+    
+    @mixin custom-scrollbar {
+        &::-webkit-scrollbar {
+            width: $scrollbar-width;
+        }
+        &::-webkit-scrollbar-track {
+            background: transparent;
+            border-radius: $link-radius;
+        }
+        &::-webkit-scrollbar-thumb {
+            background-color: transparent;
+            border-radius: $link-radius;
+        }
+        &:hover::-webkit-scrollbar-thumb {
+            background-color: var(--ks-border-primary);
+        }
     }
 
-    .docsMenu{
+    .docsMenuWrapper {
+        position: sticky;
+        top: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        padding: 0 27px;
+        z-index: 3;
+    }
+
+    .menuOpener {
+        flex: 1;
+        margin: 0;
+        width: 100%;
+        border-radius: $link-radius;
+        font-weight: 600;
+        transition: all 0.2s ease;
+
+        &.is-open {
+            border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
+            position: relative;
+            z-index: 1001;
+        }
+    }
+
+    .expandIcon {
+        margin-left: 1rem;
+        font-size: 1.5rem;
+        transition: transform 0.2s $transition-timing;
+        &.rotate-icon {
+            transform: rotate(180deg);
+        }
+    }
+
+    .docsMenuContainer {
         position: absolute;
         z-index: 1000;
-        padding: .5rem 1rem;
-        left: 1rem;
+        padding: 1rem 0.25rem 1rem 0.5rem;
+        left: 27px;
+        right: 27px;
         top: 100%;
-        right: 1rem;
         background-color: var(--ks-background-card);
-        border-radius: 6px;
+        border-radius: 0 0 $link-radius $link-radius;
+        border: 1px solid var(--ks-border-primary);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+        margin-top: -1px;
     }
 
-    .docsMenuWrapper{
-        position: relative;
-        display: flex;
-    }
+    .docsMenu {
+        max-height: calc(100vh - 210px);
+        overflow-y: auto;
+        padding-right: 0.25rem;
 
-    .menuOpener{
-        flex: 1;
-        margin: 1rem;
-    }
+        @include custom-scrollbar;
 
-    .expandIcon{
-        margin-left: 1rem;
+        a, :deep(span[class*="depth-"]) {
+            color: var(--ks-content-primary);
+            text-decoration: none;
+            display: block;
+            padding: 0.25rem 0.5rem;
+            border-radius: $link-radius;
+            transition: all 0.2s ease;
+            margin-bottom: 2px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            width: 100%;
+
+            @for $i from 0 through 5 {
+                $base-pad: 0.5rem + ($i * 1rem);
+                
+                &.depth-#{$i} {
+                    padding-left: $base-pad;
+                    @if $i == 0 {
+                        font-weight: 500;
+                    } @else if $i == 1 {
+                        font-size: 0.8rem;
+                        color: var(--ks-content-secondary);
+                    } @else {
+                        font-size: 0.75rem;
+                        color: var(--ks-content-secondary);
+                        opacity: max(0.6, 0.9 - ($i - 2) * 0.1);
+                    }
+                }
+                
+                &.active-page.depth-#{$i} {
+                    padding-left: calc(#{$base-pad} - 3px);
+                }
+            }
+
+            &:hover {
+                color: var(--ks-primary);
+                background-color: var(--ks-button-background-secondary-hover);
+            }
+
+            &.active-page {
+                color: var(--ks-content-link) !important;
+                font-weight: 600;
+                opacity: 1 !important;
+                background-color: var(--ks-button-background-secondary-hover);
+            }
+        }
+
+        li {
+            margin-bottom: 0.5rem;
+
+            &:last-child {
+                margin-bottom: 0;
+            }
+
+            > span {
+                display: block;
+                padding: 0.25rem 0.5rem;
+                margin-bottom: 0.15rem;
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 0.05em;
+                color: var(--ks-content-secondary);
+                text-transform: uppercase;
+                border-radius: $link-radius;
+            }
+
+            &.active-section {
+                > span {
+                    color: var(--ks-content-link);
+                }
+            }
+        }
     }
 </style>

@@ -1,17 +1,5 @@
 package io.kestra.core.serializers;
 
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.exc.InvalidTypeIdException;
-import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
-import io.kestra.core.models.validations.ManualConstraintViolation;
-import jakarta.inject.Singleton;
-import org.apache.commons.io.FilenameUtils;
-import org.apache.commons.io.IOUtils;
-
-import jakarta.validation.ConstraintViolationException;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -20,32 +8,48 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
 
-@Singleton
-public class YamlParser {
-    private static final ObjectMapper STRICT_MAPPER = JacksonMapper.ofYaml()
+import org.apache.commons.io.FilenameUtils;
+import org.apache.commons.io.IOUtils;
+
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.exc.InvalidTypeIdException;
+import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
+
+import io.kestra.core.models.validations.ManualConstraintViolation;
+
+import jakarta.validation.ConstraintViolationException;
+
+public final class YamlParser {
+    private static final ObjectMapper NON_STRICT_MAPPER = JacksonMapper.ofYaml()
         .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
         .disable(DeserializationFeature.ADJUST_DATES_TO_CONTEXT_TIME_ZONE);
 
-    private static final ObjectMapper NON_STRICT_MAPPER = STRICT_MAPPER.copy()
-        .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    private static final ObjectMapper STRICT_MAPPER = NON_STRICT_MAPPER.copy()
+        .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, true);
 
     public static boolean isValidExtension(Path path) {
         return FilenameUtils.getExtension(path.toFile().getAbsolutePath()).equals("yaml") || FilenameUtils.getExtension(path.toFile().getAbsolutePath()).equals("yml");
     }
 
-    public <T> T parse(String input, Class<T> cls) {
+    public static <T> T parse(String input, Class<T> cls) {
         return read(input, cls, type(cls));
     }
 
+    public static <T> T parse(String input, Class<T> cls, Boolean strict) {
+        return strict ? read(input, cls, type(cls)) : readNonStrict(input, cls, type(cls));
+    }
 
-    public <T> T parse(Map<String, Object> input, Class<T> cls, Boolean strict) {
+    public static <T> T parse(Map<String, Object> input, Class<T> cls, Boolean strict) {
         ObjectMapper currentMapper = strict ? STRICT_MAPPER : NON_STRICT_MAPPER;
 
         try {
             return currentMapper.convertValue(input, cls);
         } catch (IllegalArgumentException e) {
-            if(e.getCause() instanceof JsonProcessingException jsonProcessingException) {
-                jsonProcessingExceptionHandler(input, type(cls), jsonProcessingException);
+            if (e.getCause() instanceof JsonProcessingException jsonProcessingException) {
+                throw toConstraintViolationException(input, type(cls), jsonProcessingException);
             }
 
             throw e;
@@ -56,7 +60,7 @@ public class YamlParser {
         return cls.getSimpleName().toLowerCase();
     }
 
-    public <T> T parse(File file, Class<T> cls) throws ConstraintViolationException {
+    public static <T> T parse(File file, Class<T> cls) throws ConstraintViolationException {
         try {
             String input = IOUtils.toString(file.toURI(), StandardCharsets.UTF_8);
             return read(input, cls, type(cls));
@@ -77,23 +81,48 @@ public class YamlParser {
         }
     }
 
-    private <T> T read(String input, Class<T> objectClass, String resource) {
+    private static <T> T read(String input, Class<T> objectClass, String resource) {
         try {
             return STRICT_MAPPER.readValue(input, objectClass);
         } catch (JsonProcessingException e) {
-            jsonProcessingExceptionHandler(input, resource, e);
+            throw toConstraintViolationException(input, resource, e);
         }
+    }
 
-        return null;
+    private static <T> T readNonStrict(String input, Class<T> objectClass, String resource) {
+        try {
+            return NON_STRICT_MAPPER.readValue(input, objectClass);
+        } catch (JsonProcessingException e) {
+            throw toConstraintViolationException(input, resource, e);
+        }
+    }
+
+    private static String formatYamlErrorMessage(String originalMessage, JsonProcessingException e) {
+        StringBuilder friendlyMessage = new StringBuilder();
+        if (originalMessage.contains("Expected a field name")) {
+            friendlyMessage.append("YAML syntax error: Invalid structure. Check indentation and ensure all fields are properly formatted.");
+        } else if (originalMessage.contains("MappingStartEvent")) {
+            friendlyMessage.append("YAML syntax error: Unexpected mapping start. Verify that scalar values are properly quoted if needed.");
+        } else if (originalMessage.contains("Scalar value")) {
+            friendlyMessage.append("YAML syntax error: Expected a simple value but found complex structure. Check for unquoted special characters.");
+        } else {
+            friendlyMessage.append("YAML parsing error: ").append(originalMessage.replaceAll("org\\.yaml\\.snakeyaml.*", "").trim());
+        }
+        if (e.getLocation() != null) {
+            int line = e.getLocation().getLineNr();
+            friendlyMessage.append(String.format(" (at line %d)", line));
+        }
+        // Return a generic but cleaner message for other YAML errors
+        return friendlyMessage.toString();
     }
 
     @SuppressWarnings("unchecked")
-    private static <T> void jsonProcessingExceptionHandler(T target, String resource, JsonProcessingException e) throws ConstraintViolationException {
+    public static <T> ConstraintViolationException toConstraintViolationException(T target, String resource, JsonProcessingException e) {
         if (e.getCause() instanceof ConstraintViolationException constraintViolationException) {
-            throw constraintViolationException;
+            return constraintViolationException;
         } else if (e instanceof InvalidTypeIdException invalidTypeIdException) {
             // This error is thrown when a non-existing task is used
-            throw new ConstraintViolationException(
+            return new ConstraintViolationException(
                 "Invalid type: " + invalidTypeIdException.getTypeId(),
                 Set.of(
                     ManualConstraintViolation.of(
@@ -114,7 +143,7 @@ public class YamlParser {
             );
         } else if (e instanceof UnrecognizedPropertyException unrecognizedPropertyException) {
             var message = unrecognizedPropertyException.getOriginalMessage() + unrecognizedPropertyException.getMessageSuffix();
-            throw new ConstraintViolationException(
+            return new ConstraintViolationException(
                 message,
                 Collections.singleton(
                     ManualConstraintViolation.of(
@@ -124,13 +153,15 @@ public class YamlParser {
                         unrecognizedPropertyException.getPathReference(),
                         null
                     )
-                ));
+                )
+            );
         } else {
-            throw new ConstraintViolationException(
-                "Illegal "+ resource +" yaml: " + e.getMessage(),
+            String userFriendlyMessage = formatYamlErrorMessage(e.getMessage(), e);
+            return new ConstraintViolationException(
+                "Illegal " + resource + " source: " + userFriendlyMessage,
                 Collections.singleton(
                     ManualConstraintViolation.of(
-                        e.getCause() == null ? e.getMessage() : e.getMessage() + "\nCaused by: " + e.getCause().getMessage(),
+                        userFriendlyMessage,
                         target,
                         (Class<T>) target.getClass(),
                         "yaml",
@@ -141,4 +172,3 @@ public class YamlParser {
         }
     }
 }
-

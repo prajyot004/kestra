@@ -1,15 +1,13 @@
 package io.kestra.core.utils;
 
-import org.junit.jupiter.api.Test;
-
 import java.nio.file.Path;
 import java.util.List;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.containsInAnyOrder;
-import static org.hamcrest.Matchers.is;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class PathMatcherPredicateTest {
@@ -40,11 +38,13 @@ class PathMatcherPredicateTest {
 
     @Test
     void shouldAddBasePathForExpressionWithNoPrefix() {
-        assertEquals(List.of("glob:/sub/dir/**/*"),
+        assertEquals(
+            List.of("glob:/sub/dir/**/*"),
             PathMatcherPredicate.matches(Path.of("/sub/dir"), List.of("**/*")).syntaxAndPatterns()
         );
 
-        assertEquals(List.of("glob:/sub/dir/**/*"),
+        assertEquals(
+            List.of("glob:/sub/dir/**/*"),
             PathMatcherPredicate.matches(Path.of("/sub/dir"), List.of("/**/*")).syntaxAndPatterns()
         );
     }
@@ -102,11 +102,7 @@ class PathMatcherPredicateTest {
         List<Path> filtered = paths.stream().filter(predicate).toList();
 
         // Then
-        assertThat(filtered, containsInAnyOrder(
-            is(Path.of("/a/b/c/1")),
-            is(Path.of("/b/c/d/3")),
-            is(Path.of("/c/5"))
-        ));
+        assertThat(filtered).containsExactlyInAnyOrder(Path.of("/a/b/c/1"), Path.of("/b/c/d/3"), Path.of("/c/5"));
 
     }
 }

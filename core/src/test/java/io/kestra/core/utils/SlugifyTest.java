@@ -1,13 +1,12 @@
 package io.kestra.core.utils;
 
+import java.util.stream.Stream;
+
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
-import java.util.stream.Stream;
-
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import static org.assertj.core.api.Assertions.assertThat;
 
 class SlugifyTest {
     static Stream<Arguments> source() {
@@ -21,6 +20,6 @@ class SlugifyTest {
     @ParameterizedTest
     @MethodSource("source")
     void merge(String source, String transform) {
-        assertThat(Slugify.of(source), is(transform));
+        assertThat(Slugify.of(source)).isEqualTo(transform);
     }
 }

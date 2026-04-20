@@ -5,7 +5,7 @@ import {
     within,
     expect,
     waitFor
-} from "@storybook/test";
+} from "storybook/test";
 import LogLine from "../../../../src/components/logs/LogLine.vue";
 import {ElCard} from "element-plus";
 
@@ -139,7 +139,7 @@ export const WithFilter = {
     }
 }
 
-// check if when the filter changes, the message disapears
+// check if when the filter changes, the message disappears
 WithFilter.play = async ({canvasElement}) => {
     const can = within(canvasElement);
     const input = can.getByLabelText("Filter");
@@ -192,7 +192,7 @@ export const MultipleLogLinesWithAllLevels = () => {
 export const ShortLogWithoutContext = () => {
     return (
         <ElCard>
-            <LogLine log={{level: "INFO", message: "test"}} />
+            <LogLine log={{level: "INFO", message: "test"}} level="INFO" />
         </ElCard>
     );
 }

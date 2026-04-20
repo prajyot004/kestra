@@ -1,14 +1,22 @@
 package io.kestra.core.docs;
 
-import io.kestra.core.plugins.PluginClassAndMetadata;
-import lombok.*;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 
-import java.util.*;
+import io.kestra.core.plugins.PluginClassAndMetadata;
+
+import lombok.AllArgsConstructor;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.ToString;
 
 @Getter
 @EqualsAndHashCode
 @ToString
 public class ClassPluginDocumentation<T> extends AbstractClassDocumentation<T> {
+    private static final Map<PluginDocIdentifier, ClassPluginDocumentation<?>> CACHE = new ConcurrentHashMap<>();
     private String icon;
     private String group;
     protected String docLicense;
@@ -35,7 +43,9 @@ public class ClassPluginDocumentation<T> extends AbstractClassDocumentation<T> {
             replacement = cls.getName();
         }
 
-        if (this.group != null && cls.getPackageName().startsWith(this.group) && cls.getPackageName().length() > this.group.length() && cls.getPackageName().charAt(this.group.length()) == '.') {
+        if (
+            this.group != null && cls.getPackageName().startsWith(this.group) && cls.getPackageName().length() > this.group.length() && cls.getPackageName().charAt(this.group.length()) == '.'
+        ) {
             this.subGroup = cls.getPackageName().substring(this.group.length() + 1);
         }
 
@@ -50,7 +60,7 @@ public class ClassPluginDocumentation<T> extends AbstractClassDocumentation<T> {
         }
 
         if (this.outputsSchema.containsKey("properties")) {
-            this.outputs = flatten(properties(this.outputsSchema), required(this.outputsSchema));
+            this.outputs = flattenWithoutType(properties(this.outputsSchema), required(this.outputsSchema));
         }
 
         // metrics
@@ -59,12 +69,14 @@ public class ClassPluginDocumentation<T> extends AbstractClassDocumentation<T> {
 
             this.docMetrics = metrics
                 .stream()
-                .map(r -> new MetricDoc(
-                    (String) r.get("name"),
-                    (String) r.get("type"),
-                    (String) r.get("unit"),
-                    (String) r.get("description")
-                ))
+                .map(
+                    r -> new MetricDoc(
+                        (String) r.get("name"),
+                        (String) r.get("type"),
+                        (String) r.get("unit"),
+                        (String) r.get("description")
+                    )
+                )
                 .toList();
         }
 
@@ -73,8 +85,12 @@ public class ClassPluginDocumentation<T> extends AbstractClassDocumentation<T> {
         }
     }
 
-    public static <T> ClassPluginDocumentation<T> of(JsonSchemaGenerator jsonSchemaGenerator, PluginClassAndMetadata<T> plugin, boolean allProperties) {
-        return new ClassPluginDocumentation<>(jsonSchemaGenerator, plugin, allProperties);
+    public static <T> ClassPluginDocumentation<T> of(JsonSchemaGenerator jsonSchemaGenerator, PluginClassAndMetadata<T> plugin, String version, boolean allProperties) {
+        //noinspection unchecked
+        return (ClassPluginDocumentation<T>) CACHE.computeIfAbsent(
+            new PluginDocIdentifier(plugin.type(), version, allProperties),
+            (key) -> new ClassPluginDocumentation<>(jsonSchemaGenerator, plugin, allProperties)
+        );
     }
 
     @AllArgsConstructor
@@ -85,5 +101,10 @@ public class ClassPluginDocumentation<T> extends AbstractClassDocumentation<T> {
         String unit;
         String description;
     }
-}
 
+    private record PluginDocIdentifier(String pluginClassAndVersion, boolean allProperties) {
+        public PluginDocIdentifier(Class<?> pluginClass, String version, boolean allProperties) {
+            this(pluginClass.getName() + ":" + version, allProperties);
+        }
+    }
+}

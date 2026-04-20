@@ -1,17 +1,19 @@
 package io.kestra.plugin.core.condition;
 
-import io.kestra.core.models.executions.Execution;
-import io.kestra.core.models.flows.Flow;
-import io.kestra.core.services.ConditionService;
-import io.kestra.core.utils.TestsUtils;
-import io.kestra.core.junit.annotations.KestraTest;
-import jakarta.inject.Inject;
-import org.junit.jupiter.api.Test;
-
 import java.util.Map;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import org.junit.jupiter.api.Test;
+
+import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.models.executions.Execution;
+import io.kestra.core.models.flows.Flow;
+import io.kestra.core.models.property.Property;
+import io.kestra.core.services.ConditionService;
+import io.kestra.core.utils.TestsUtils;
+
+import jakarta.inject.Inject;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 @KestraTest
 class ExecutionOutputsTest {
@@ -24,15 +26,16 @@ class ExecutionOutputsTest {
         Execution execution = TestsUtils.mockExecution(
             flow,
             Map.of(),
-            Map.of("test", "value"));
+            Map.of("test", "value")
+        );
 
         ExecutionOutputs build = ExecutionOutputs.builder()
-            .expression("{{ trigger.outputs.test == 'value' }}")
+            .expression(Property.ofExpression("{{ trigger.outputs.test == 'value' }}"))
             .build();
 
         boolean test = conditionService.isValid(build, flow, execution);
 
-        assertThat(test, is(true));
+        assertThat(test).isTrue();
     }
 
     @Test
@@ -41,15 +44,16 @@ class ExecutionOutputsTest {
         Execution execution = TestsUtils.mockExecution(
             flow,
             Map.of(),
-            Map.of("test", "value"));
+            Map.of("test", "value")
+        );
 
         ExecutionOutputs build = ExecutionOutputs.builder()
-            .expression("{{ unknown is defined }}")
+            .expression(Property.ofExpression("{{ unknown is defined }}"))
             .build();
 
         boolean test = conditionService.isValid(build, flow, execution);
 
-        assertThat(test, is(false));
+        assertThat(test).isFalse();
     }
 
     @Test
@@ -58,11 +62,11 @@ class ExecutionOutputsTest {
         Execution execution = TestsUtils.mockExecution(flow, Map.of());
 
         ExecutionOutputs build = ExecutionOutputs.builder()
-            .expression("{{ not evaluated }}")
+            .expression(Property.ofExpression("{{ not evaluated }}"))
             .build();
 
         boolean test = conditionService.isValid(build, flow, execution);
 
-        assertThat(test, is(false));
+        assertThat(test).isFalse();
     }
 }

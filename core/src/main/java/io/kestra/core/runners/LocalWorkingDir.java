@@ -1,13 +1,10 @@
 package io.kestra.core.runners;
 
-import io.kestra.core.utils.IdUtils;
-import io.kestra.core.utils.PathMatcherPredicate;
-import org.apache.commons.io.FileUtils;
-
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,11 +15,20 @@ import java.util.Collections;
 import java.util.List;
 import java.util.function.Predicate;
 
+import org.apache.commons.io.FileUtils;
+
+import io.kestra.core.models.tasks.FileExistComportment;
+import io.kestra.core.utils.IdUtils;
+import io.kestra.core.utils.PathMatcherPredicate;
+
+import lombok.extern.slf4j.Slf4j;
+
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 
 /**
  * Default implementation of the {@link WorkingDir}.
  */
+@Slf4j
 public class LocalWorkingDir implements WorkingDir {
 
     private final Path workingDirPath;
@@ -41,7 +47,7 @@ public class LocalWorkingDir implements WorkingDir {
      * Creates a new {@link LocalWorkingDir} instance.
      *
      * @param tmpdirBasePath The base temporary directory for this working-dir.
-     * @param workingDirId   The working directory id.
+     * @param workingDirId The working directory id.
      */
     public LocalWorkingDir(final Path tmpdirBasePath, final String workingDirId) {
         this.workingDirId = workingDirId;
@@ -176,6 +182,14 @@ public class LocalWorkingDir implements WorkingDir {
      **/
     @Override
     public Path putFile(Path path, InputStream inputStream) throws IOException {
+        return putFile(path, inputStream, FileExistComportment.OVERWRITE);
+    }
+
+    /**
+     * {@inheritDoc}
+     **/
+    @Override
+    public Path putFile(Path path, InputStream inputStream, FileExistComportment comportment) throws IOException {
         if (path == null) {
             throw new IllegalArgumentException("Cannot create a working directory file with a null path");
         }
@@ -185,15 +199,29 @@ public class LocalWorkingDir implements WorkingDir {
         Path newFilePath = this.resolve(path);
         Files.createDirectories(newFilePath.getParent());
 
-        if (Files.notExists(newFilePath)) {
+        if (Files.exists(newFilePath)) {
+            switch (comportment) {
+                case OVERWRITE -> {
+                    log.info("File {} already exist. It will be overwritten", newFilePath);
+                    copyFile(inputStream, newFilePath);
+                }
+                case FAIL -> throw new FileAlreadyExistsException("File " + newFilePath + " already exist");
+                case WARN -> log.warn("File {} already exist. It will be ignore", newFilePath);
+                case IGNORE -> {
+                }
+            }
+        } else {
             Files.createFile(newFilePath);
-        }
-
-        try (inputStream) {
-            Files.copy(inputStream, newFilePath, REPLACE_EXISTING);
+            copyFile(inputStream, newFilePath);
         }
 
         return newFilePath;
+    }
+
+    private static void copyFile(InputStream inputStream, Path path) throws IOException {
+        try (inputStream) {
+            Files.copy(inputStream, path, REPLACE_EXISTING);
+        }
     }
 
     /**

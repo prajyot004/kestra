@@ -4,8 +4,6 @@
             <el-button size="large" @click="toast">
                 El Message
             </el-button>
-
-            <MessageBoxDemo />
         </div>
 
         <div class="my-2 flex flex-wrap items-center justify-center text-center">
@@ -86,7 +84,7 @@
                 :key="type"
                 :type="type.toLowerCase()"
                 :title="`${type} Alert`"
-                show-icon
+                showIcon
             />
         </div>
 
@@ -191,14 +189,14 @@
             </el-select>
         </div>
 
-        <Tabs :tabs="tabs" :embed-active-tab="activeTab" @changed="tabChanged" />
+        <Tabs :tabs="tabs" :embedActiveTab="activeTab" @changed="(tab) => { if(tab.name) tabChanged({name:tab.name}) }" />
         <div>
             <div class="sub-title my-2 text-sm text-gray-600">
                 list suggestions when activated
             </div>
             <el-autocomplete
                 v-model="state1"
-                :fetch-suggestions="querySearch"
+                :fetchSuggestions="querySearch"
                 clearable
                 class="inline-input w-50"
                 placeholder="Please Input"
@@ -224,8 +222,8 @@
     </div>
 </template>
 
-<script lang="ts" setup>
-    import {getCurrentInstance, onMounted, ref} from "vue"
+<script setup lang="ts">
+    import {onMounted, ref} from "vue"
     import {ElMessage} from "element-plus"
     import Search from "vue-material-design-icons/SearchWeb.vue"
     import Edit from "vue-material-design-icons/Pencil.vue"
@@ -235,13 +233,6 @@
     import Delete from "vue-material-design-icons/Delete.vue"
     import Upload from "vue-material-design-icons/Upload.vue";
     import Tabs from "../../../src/components/Tabs.vue"
-
-    const app = getCurrentInstance()?.appContext.config.globalProperties as any
-
-    if(app){
-        app.$router = {}
-        app.$route = {params: {tab: "first"}}
-    }
 
     const input = ref("")
     const curDate = ref(new Date())

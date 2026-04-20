@@ -1,36 +1,35 @@
 <template>
-    <span data-component="FILENAME_PLACEHOLDER" class="kicon">
-        <el-tooltip
-            effect="light"
-            v-if="tooltip"
-            :content="tooltip"
-            :raw-content="true"
-            :placement="placement"
-            :persistent="false"
-            transition=""
-            :hide-after="0"
-        >
+    <el-tooltip
+        effect="light"
+        v-if="tooltip"
+        :content="tooltip"
+        :rawContent="true"
+        v-bind="placement ? {placement} : {}"
+        :persistent="false"
+        :enterable="false"
+        transition=""
+        :hideAfter="0"
+    >
+        <span class="kicon">
             <slot />
-        </el-tooltip>
-        <slot v-else />
+        </span>
+    </el-tooltip>
+    <span v-else class="kicon">
+        <slot />
     </span>
 </template>
-<script>
-    export default {
-        props:{
-            tooltip: {
-                type: String,
-                default: ""
-            },
-            placement:{
-                type: String,
-                default: "top"
-            },
-        },
-    }
+<script setup lang="ts">
+    withDefaults(
+        defineProps<{
+            tooltip?: string;
+            placement?: string;
+        }>(),{
+            tooltip: "",
+            placement: "",
+        });
 </script>
 
-<style lang="scss" scoped>
+<style scoped lang="scss">
     .kicon {
         white-space: nowrap;
     }

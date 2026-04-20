@@ -1,0 +1,110 @@
+package io.kestra.cli;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import io.kestra.core.runners.*;
+import io.kestra.core.server.Service;
+import io.kestra.core.utils.ExecutorsUtils;
+
+import org.awaitility.Awaitility;
+import org.awaitility.core.ConditionTimeoutException;
+import io.kestra.core.worker.Controller;
+import io.kestra.executor.DefaultExecutor;
+
+import io.micronaut.context.ApplicationContext;
+import io.micronaut.context.annotation.Value;
+import jakarta.annotation.PreDestroy;
+import jakarta.inject.Inject;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+import io.kestra.core.utils.Await;
+
+@Slf4j
+public class StandAloneRunner implements Runnable, AutoCloseable {
+    @Setter
+    protected int workerThread = Math.max(3, Runtime.getRuntime().availableProcessors());
+    @Setter
+    protected boolean schedulerEnabled = true;
+    @Setter
+    protected boolean workerEnabled = true;
+    @Setter
+    protected boolean indexerEnabled = true;
+    @Setter
+    protected boolean controllerEnabled = true;
+
+    @Inject
+    private ExecutorsUtils executorsUtils;
+
+    @Inject
+    private ApplicationContext applicationContext;
+
+    @Value("${kestra.server.standalone.running.timeout:PT1M}")
+    private Duration runningTimeout;
+
+    private final List<Service> servers = new ArrayList<>();
+
+    private final AtomicBoolean running = new AtomicBoolean(false);
+
+    private ExecutorService poolExecutor;
+
+    @Override
+    public void run() {
+        running.set(true);
+
+        poolExecutor = executorsUtils.cachedThreadPool("standalone-runner");
+        poolExecutor.execute(applicationContext.getBean(DefaultExecutor.class));
+
+        if (controllerEnabled) {
+            Controller controller = applicationContext.getBean(Controller.class);
+            poolExecutor.execute(controller::start);
+            servers.add(controller);
+        }
+
+        if (workerEnabled) {
+            Worker worker = applicationContext.getBean(Worker.class);
+            poolExecutor.execute(() -> worker.start(workerThread, null));
+            servers.add(worker);
+        }
+
+        if (schedulerEnabled) {
+            Scheduler scheduler = applicationContext.getBean(Scheduler.class);
+            poolExecutor.execute(scheduler);
+            servers.add(scheduler);
+        }
+
+        if (indexerEnabled) {
+            Indexer indexer = applicationContext.getBean(Indexer.class);
+            poolExecutor.execute(indexer);
+            servers.add(indexer);
+        }
+
+        try {
+            Await.await().atMost(runningTimeout).until(
+                () -> servers.stream().allMatch(s -> Optional.ofNullable(s.getState()).orElse(Service.ServiceState.RUNNING).isRunning())
+            );
+        } catch (ConditionTimeoutException e) {
+            throw new RuntimeException(
+                servers.stream().filter(s -> !Optional.ofNullable(s.getState()).orElse(Service.ServiceState.RUNNING).isRunning())
+                    .map(Service::getClass)
+                    .toList() + " not started in time"
+            );
+        }
+    }
+
+    public boolean isRunning() {
+        return this.running.get();
+    }
+
+    @PreDestroy
+    @Override
+    public void close() {
+        if (this.poolExecutor != null) {
+            this.poolExecutor.shutdown();
+        }
+    }
+}

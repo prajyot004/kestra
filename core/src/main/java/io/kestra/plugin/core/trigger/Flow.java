@@ -1,6 +1,18 @@
 package io.kestra.plugin.core.trigger;
 
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+import io.kestra.core.models.property.Property;
+import io.kestra.core.models.triggers.Window;
+import io.kestra.core.utils.*;
+import org.apache.commons.lang3.stream.Streams;
+import org.slf4j.Logger;
+
 import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.exceptions.InternalException;
 import io.kestra.core.models.Label;
@@ -16,16 +28,13 @@ import io.kestra.core.models.triggers.AbstractTrigger;
 import io.kestra.core.models.triggers.TimeWindow;
 import io.kestra.core.models.triggers.TriggerOutput;
 import io.kestra.core.models.triggers.multipleflows.MultipleCondition;
-import io.kestra.core.models.triggers.multipleflows.MultipleConditionStorageInterface;
+import io.kestra.core.models.triggers.multipleflows.MultipleConditionStateStore;
 import io.kestra.core.models.triggers.multipleflows.MultipleConditionWindow;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.services.LabelService;
-import io.kestra.core.utils.IdUtils;
-import io.kestra.core.utils.ListUtils;
-import io.kestra.core.utils.MapUtils;
-import io.kestra.core.utils.TruthUtils;
-import io.kestra.core.validations.ConditionValidation;
+import io.kestra.core.validations.FlowTriggerValidation;
 import io.kestra.core.validations.PreconditionFilterValidation;
+
 import io.micronaut.core.annotation.Nullable;
 import io.swagger.v3.oas.annotations.Hidden;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -34,16 +43,12 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Positive;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.Logger;
 
-import java.util.*;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
-
+import static io.kestra.core.models.flows.State.Type.PAUSED;
 import static io.kestra.core.topologies.FlowTopologyService.SIMULATED_EXECUTION;
 import static io.kestra.core.utils.Rethrow.throwPredicate;
 
@@ -53,13 +58,11 @@ import static io.kestra.core.utils.Rethrow.throwPredicate;
 @Getter
 @NoArgsConstructor
 @Schema(
-    title = "Trigger a flow in response to a state change in one or more other flows.",
+    title = "Trigger a Flow based on other Flows’ executions.",
     description = """
-        You can trigger a flow as soon as another flow ends. This allows you to add implicit dependencies between multiple flows, which can often be managed by different teams.
+        Fires when upstream Flow executions meet `preconditions` (required) and optional trigger `conditions` (no Pebble templating). Lets you chain Flows owned by different teams.
 
-        A flow trigger must have `preconditions` which filter on other flow executions.
-        It can also have standard trigger `conditions`.
-        Upstream execution outputs will be available in a `trigger.outputs` variable."""
+        Upstream execution outputs are exposed under `trigger.outputs`; you can also pass `inputs` to the downstream Flow."""
 )
 @Plugin(
     examples = {
@@ -188,23 +191,84 @@ import static io.kestra.core.utils.Rethrow.throwPredicate;
                             - field: NAMESPACE
                               type: STARTS_WITH
                               value: company"""
+        ),
+        @Example(
+            full = true,
+            title = """
+                4) Create a `System Flow` to send a Sentry issue on any failure or warning state \
+                within the `company.payroll` namespace. This example uses the Sentry Execution task and a Flow trigger with `conditions`.""",
+            code = """
+                id: sentry_execution_example
+                namespace: company.team
+
+                tasks:
+                - id: send_alert
+                  type: io.kestra.plugin.notifications.sentry.SentryExecution
+                  executionId: "{{ trigger.executionId }}"
+                  transaction: "/execution/id/{{ trigger.executionId }}"
+                  dsn: "{{ secret('SENTRY_DSN') }}"
+                  level: ERROR
+
+                triggers:
+                - id: failed_prod_workflows
+                  type: io.kestra.plugin.core.trigger.Flow
+                  conditions:
+                  - type: io.kestra.plugin.core.condition.ExecutionStatus
+                    in:
+                      - FAILED
+                      - WARNING
+                  - type: io.kestra.plugin.core.condition.ExecutionNamespace
+                    namespace: company.payroll
+                    prefix: false"""
+        ),
+        @Example(
+            full = true,
+            title = """
+                5) Chain two different flows (`flow_a` and `flow_b`) and trigger `flow_b` only after `flow_a` completes successfully with matching labels. Note that this example shows two separate flows.""",
+            code = """
+                id: flow_a
+                namespace: company.team
+                labels:
+                  type: orchestration
+                tasks:
+                  - id: hello
+                    type: io.kestra.plugin.core.log.Log
+                    message: Hello World!
+                ---
+                id: flow_b
+                namespace: company.team
+                tasks:
+                  - id: hello
+                    type: io.kestra.plugin.core.log.Log
+                    message: Hello World!
+                triggers:
+                  - id: on_completion
+                    type: io.kestra.plugin.core.trigger.Flow
+                    dependsOn:
+                      - namespace: company.team
+                        flowId: flow_a
+                        states: [SUCCESS]
+                        labels:
+                          type: orchestration
+                """
         )
-    },
-    aliases = "io.kestra.core.models.triggers.types.Flow"
+
+    }
 )
 @Slf4j
-@ConditionValidation
+@FlowTriggerValidation
 public class Flow extends AbstractTrigger implements TriggerOutput<Flow.Output> {
     private static final String TRIGGER_VAR = "trigger";
     private static final String OUTPUTS_VAR = "outputs";
+    static final String DEPENDS_ON_CONDITION_PREFIX = "depends_on_";
 
     @Nullable
     @Schema(
         title = "Pass upstream flow's outputs to inputs of the current flow.",
         description = """
-            The inputs allow you to pass data object or a file to the downstream flow as long as those outputs are defined on the flow-level in the upstream flow.
+            The inputs property passes data objects or a file to the downstream flow as long as those outputs are defined on the flow-level in the upstream flow.
             ::alert{type="warning"}
-            Make sure that the inputs and task outputs defined in this Flow trigger match the outputs of the upstream flow. Otherwise, the downstream flow execution will not to be created. If that happens, go to the Logs tab on the Flow page to understand the error.
+            Make sure that the inputs and task outputs defined in this Flow trigger match the outputs of the upstream flow. Otherwise, the downstream flow execution will not to be created. If that happens, go to the Logs tab on the Flow page to investigate the error.
             ::"""
     )
     @PluginProperty
@@ -214,14 +278,14 @@ public class Flow extends AbstractTrigger implements TriggerOutput<Flow.Output> 
     @Schema(
         title = "List of execution states that will be evaluated by the trigger",
         description = """
-            By default, only executions in a terminal state will be evaluated.
+            By default, only executions in a terminal state or in the PAUSED state will be evaluated.
             Any `ExecutionStatus`-type condition will be evaluated after the list of `states`. Note that a Flow trigger cannot react to the `CREATED` state because the Flow trigger reacts to state transitions. The `CREATED` state is the initial state of an execution and does not represent a state transition.
             ::alert{type="info"}
             The trigger will be evaluated for each state change of matching executions. If a flow has two `Pause` tasks, the execution will transition from PAUSED to a RUNNING state twice — one for each Pause task. In this case, a Flow trigger listening to a `PAUSED` state will be evaluated twice.
             ::"""
     )
     @Builder.Default
-    private List<State.Type> states = State.Type.terminatedTypes();
+    private List<State.Type> states = ListUtils.concat(State.Type.terminatedTypes(), List.of(PAUSED));
 
     @Valid
     @Schema(
@@ -231,29 +295,66 @@ public class Flow extends AbstractTrigger implements TriggerOutput<Flow.Output> 
     @PluginProperty
     private Preconditions preconditions;
 
-    @SuppressWarnings("deprecation")
-    public Optional<Execution> evaluate(Optional<MultipleConditionStorageInterface> multipleConditionStorage, RunContext runContext, io.kestra.core.models.flows.Flow flow, Execution current) {
+    @Valid
+    @Schema(
+        title = "Dependencies on upstream flow executions",
+        description = "Express dependencies on upstream flow executions, which must be met for the flow trigger to be evaluated."
+    )
+    @PluginProperty
+    private List<Dependency> dependsOn;
+
+    @Valid
+    @Schema(
+        title = "Window configuration for the dependsOn trigger",
+        description = "Configure the time window within which all dependsOn conditions must be met."
+    )
+    @PluginProperty
+    private Window window;
+
+    @Schema(
+        title = "Mode for evaluating dependsOn conditions",
+        description = """
+            Specifies how the dependsOn conditions should be evaluated: ALL, ANY, or AT_LEAST.
+            When using AT_LEAST, you must also set `minSatisfied` to the minimum number of conditions that must be satisfied within the window."""
+    )
+    @PluginProperty
+    @NotNull
+    @Builder.Default
+    private MultipleCondition.Mode mode = MultipleCondition.Mode.ALL;
+
+    @Schema(
+        title = "Minimum number of satisfied conditions for AT_LEAST mode",
+        description = "When mode is set to AT_LEAST, this specifies the minimum number of conditions that must be satisfied within the window."
+    )
+    @PluginProperty
+    @Positive
+    private Integer minSatisfied;
+
+    public Optional<Execution> evaluate(Optional<MultipleConditionStateStore> multipleConditionStorage, RunContext runContext, io.kestra.core.models.flows.Flow flow, Execution current) {
         Logger logger = runContext.logger();
 
         // merge outputs from all the matched executions
         Map<String, Object> outputs = current.getOutputs();
         if (multipleConditionStorage.isPresent()) {
-            List<String> multipleConditionIds = new ArrayList<>();
             if (this.preconditions != null) {
-                multipleConditionIds.add(this.preconditions.getId());
-            }
-            ListUtils.emptyOnNull(this.conditions).stream()
-                .filter(condition -> condition instanceof io.kestra.plugin.core.condition.MultipleCondition)
-                .map(condition -> (io.kestra.plugin.core.condition.MultipleCondition) condition)
-                .forEach(condition -> multipleConditionIds.add(condition.getId()));
-
-            for (String id : multipleConditionIds) {
-                Optional<MultipleConditionWindow> multipleConditionWindow = multipleConditionStorage.get().get(flow, id);
+                Optional<MultipleConditionWindow> multipleConditionWindow = multipleConditionStorage.get().get(flow, this.preconditions.getId());
                 if (multipleConditionWindow.isPresent()) {
-                    outputs = MapUtils.merge(outputs, multipleConditionWindow.get().getOutputs());
+                    outputs = MapUtils.deepMerge(outputs, multipleConditionWindow.get().getOutputs());
+                }
+            }
+            if (!ListUtils.isEmpty(this.dependsOn)) {
+                Optional<MultipleConditionWindow> multipleConditionWindow = multipleConditionStorage.get().get(flow, DEPENDS_ON_CONDITION_PREFIX + this.getId());
+                if (multipleConditionWindow.isPresent()) {
+                    outputs = MapUtils.deepMerge(outputs, multipleConditionWindow.get().getOutputs());
                 }
             }
         }
+
+        List<Label> labels = LabelService.fromTrigger(runContext, flow, this);
+        Streams.of(current.getLabels())
+            .filter(label -> label.key().equals(Label.CORRELATION_ID))
+            .findFirst()
+            .ifPresent(label -> labels.add(label));
 
         Execution.ExecutionBuilder builder = Execution.builder()
             .id(IdUtils.create())
@@ -261,19 +362,22 @@ public class Flow extends AbstractTrigger implements TriggerOutput<Flow.Output> 
             .namespace(flow.getNamespace())
             .flowId(flow.getId())
             .flowRevision(flow.getRevision())
-            .labels(LabelService.fromTrigger(runContext, flow, this))
+            .labels(labels)
             .state(new State())
-            .trigger(ExecutionTrigger.of(
-                this,
-                Output.builder()
-                    .executionId(current.getId())
-                    .namespace(current.getNamespace())
-                    .flowId(current.getFlowId())
-                    .flowRevision(current.getFlowRevision())
-                    .state(current.getState().getCurrent())
-                    .outputs(outputs)
-                    .build()
-            ));
+            .trigger(
+                ExecutionTrigger.of(
+                    this,
+                    Output.builder()
+                        .executionId(current.getId())
+                        .executionLabels(Label.toNestedMap(current.getLabels().stream().filter(label -> !label.key().equals(Label.CORRELATION_ID)).collect(Collectors.toList())))
+                        .namespace(current.getNamespace())
+                        .flowId(current.getFlowId())
+                        .flowRevision(current.getFlowRevision())
+                        .state(current.getState().getCurrent())
+                        .outputs(outputs)
+                        .build()
+                )
+            );
 
         try {
             if (this.inputs != null) {
@@ -294,7 +398,156 @@ public class Flow extends AbstractTrigger implements TriggerOutput<Flow.Output> 
                 this.getId(),
                 e
             );
-            return Optional.empty();
+            var failedExecution = builder.build().withState(State.Type.FAILED);
+            return Optional.of(failedExecution);
+        }
+    }
+
+    // WARNING: when adding a new attribute to this class, update the hashing function inside the DependsOnMultipleCondition class.
+    @Builder
+    @Getter
+    public static class Dependency {
+        @NotNull
+        @Schema(title = "The namespace of the flow")
+        @PluginProperty
+        private String namespace;
+
+        @Schema(title = "The flow ID")
+        @PluginProperty
+        private String flowId;
+
+        @Schema(title = "The execution states")
+        @PluginProperty
+        private List<State.Type> states;
+
+        @Schema(title = "A key/value map of labels")
+        @PluginProperty
+        private Map<String, Object> labels;
+
+        @Builder.Default
+        @Schema(
+            title = "A condition that determines whether the trigger should run for that dependency.",
+            description = "A Pebble expression evaluated at trigger time. The trigger fires only when the expression evaluates to a truthy value (`true`, a non-empty string, a non-zero number). Use this to gate trigger execution on dynamic runtime values such as execution labels, flow variables, or environment conditions."
+        )
+        private Property<String> when = Property.ofValue("true");
+
+        public Condition asCondition() {
+            return new DependencyCondition(this);
+        }
+    }
+
+    public MultipleCondition dependsOnAsMultipleCondition() {
+        return this.dependsOn == null ? null : new DependsOnMultipleCondition(this.dependsOn, this.getId(), this.window, this.mode, this.minSatisfied);
+    }
+
+    @Hidden
+    public static class DependencyCondition extends Condition {
+        private final Dependency dependency;
+
+        DependencyCondition(Dependency dependency) {
+            this.dependency = dependency;
+        }
+
+        @Override
+        public boolean test(ConditionContext conditionContext) throws InternalException {
+            if (dependency.namespace != null && !conditionContext.getExecution().getNamespace().equals(dependency.namespace)) {
+                return false;
+            }
+
+            if (dependency.flowId != null && !conditionContext.getExecution().getFlowId().equals(dependency.flowId)) {
+                return false;
+            }
+
+            // we need to only evaluate on namespace and flow for simulated executions
+            if (ListUtils.emptyOnNull(conditionContext.getExecution().getLabels()).contains(SIMULATED_EXECUTION)) {
+                return true;
+            }
+
+            if (dependency.states != null && !dependency.states.contains(conditionContext.getExecution().getState().getCurrent())) {
+                return false;
+            }
+
+            if (dependency.labels != null) {
+                boolean notMatched = dependency.labels.entrySet().stream()
+                    .map(entry -> new Label(entry.getKey(), String.valueOf(entry.getValue())))
+                    .anyMatch(label -> !ListUtils.emptyOnNull(conditionContext.getExecution().getLabels()).contains(label));
+                if (notMatched) {
+                    return false;
+                }
+            }
+
+            return TruthUtils.isTruthy(conditionContext.getRunContext().render(dependency.when).as(String.class).orElse("true"));
+        }
+    }
+
+    @Hidden
+    public static class DependsOnMultipleCondition implements MultipleCondition {
+        private final List<Dependency> dependencies;
+        private final String id;
+        private final Window window;
+        private final Mode mode;
+        private final Integer minSatisfied;
+
+        DependsOnMultipleCondition(List<Dependency> dependencies, String id, Window window, Mode mode, Integer minSatisfied) {
+            this.dependencies = dependencies;
+            this.id = id;
+            this.window = window;
+            this.mode = mode;
+            this.minSatisfied = minSatisfied;
+        }
+
+
+        @Override
+        public String getId() {
+            return DEPENDS_ON_CONDITION_PREFIX + id;
+        }
+
+        @Override
+        public TimeWindow getTimeWindow() {
+            return window == null ? TimeWindow.builder().build() : window.toTimeWindow();
+        }
+
+        @Override
+        public Boolean getResetOnSuccess() {
+            return window == null ? Boolean.TRUE : window.isFireOnce();
+        }
+
+        @Override
+        public Map<String, Condition> getConditions() {
+            return ListUtils.emptyOnNull(dependencies).stream()
+                .map(
+                    dependency -> Map.entry(
+                        hash(dependency),
+                        new DependencyCondition(dependency)
+                    )
+                )
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+        }
+
+        @Override
+        public Logger logger() {
+            return log;
+        }
+
+        @Override
+        public Mode getMode() {
+            return mode;
+        }
+
+        @Override
+        public Integer getMinSatisfied() {
+            return minSatisfied;
+        }
+
+        private String hash(Dependency dependency) {
+            return Hashing.hashToString(
+                dependency.namespace,
+                "_", // avoid possible mismatch between namespace and flowId
+                dependency.flowId,
+                dependency.when != null ? dependency.when.toString() : null,
+                ListUtils.emptyOnNull(dependency.states).stream().sorted().map(Enum::name).collect(Collectors.joining(",")),
+                MapUtils.emptyOnNull(dependency.labels).entrySet().stream().sorted(Map.Entry.comparingByKey()).map(entry -> entry.getKey() + ":" + entry.getValue()).collect(Collectors.joining(","))
+            );
         }
     }
 
@@ -303,7 +556,7 @@ public class Flow extends AbstractTrigger implements TriggerOutput<Flow.Output> 
     public static class Preconditions implements MultipleCondition {
         @NotNull
         @NotBlank
-        @Pattern(regexp="^[a-zA-Z0-9][a-zA-Z0-9_-]*")
+        @Pattern(regexp = "^[a-zA-Z0-9][a-zA-Z0-9_-]*")
         @Schema(title = "A unique id for the preconditions")
         @PluginProperty
         private String id;
@@ -323,23 +576,23 @@ public class Flow extends AbstractTrigger implements TriggerOutput<Flow.Output> 
         protected TimeWindow timeWindow = TimeWindow.builder().build();
 
         @Schema(
-            title = "Whether to reset the evaluation results of preconditions after a first successful evaluation within the given time window.",
+            title = "Whether to reset the evaluation results of preconditions after a first successful evaluation within the given time window",
             description = """
-            By default, after a successful evaluation of the set of preconditions, the evaluation result is reset. This means the same set of conditions needs to be successfully evaluated again within the same time window to trigger a new execution.
-            In this setup, to create multiple executions, the same set of conditions must be evaluated to `true` multiple times within the defined window.
-            You can disable this by setting this property to `false`, so that within the same window, each time one of the conditions is satisfied again after a successful evaluation, it will trigger a new execution."""
+                By default, after a successful evaluation of the set of preconditions, the evaluation result is reset. This means the same set of conditions needs to be successfully evaluated again within the same time window to trigger a new execution.
+                In this setup, to create multiple executions, the same set of conditions must be evaluated to `true` multiple times within the defined window.
+                You can disable this by setting this property to `false`, so that within the same window, each time one of the conditions is satisfied again after a successful evaluation, it will trigger a new execution."""
         )
         @PluginProperty
         @Builder.Default
         private Boolean resetOnSuccess = Boolean.TRUE;
 
-        @Schema(title = "A list of preconditions to met, in the form of upstream flows.")
+        @Schema(title = "A list of preconditions to meet, in the form of upstream flows")
         @PluginProperty
         private List<UpstreamFlow> flows;
 
         @Valid
         @PluginProperty
-        @Schema(title = "A list of preconditions to met, in the form of execution filters.")
+        @Schema(title = "A list of preconditions to meet, in the form of execution filters")
         private List<ExecutionFilter> where;
 
         @JsonIgnore
@@ -347,16 +600,20 @@ public class Flow extends AbstractTrigger implements TriggerOutput<Flow.Output> 
         public Map<String, Condition> getConditions() {
             AtomicInteger conditionId = new AtomicInteger();
             Map<String, Condition> flowsCondition = ListUtils.emptyOnNull(flows).stream()
-                .map(upstreamFlow -> Map.entry(
-                    "condition_" + conditionId.incrementAndGet(),
-                    new UpstreamFlowCondition(upstreamFlow)
-                ))
+                .map(
+                    upstreamFlow -> Map.entry(
+                        "condition_" + conditionId.incrementAndGet(),
+                        new UpstreamFlowCondition(upstreamFlow)
+                    )
+                )
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
             Map<String, Condition> whereConditions = ListUtils.emptyOnNull(where).stream()
-                .map(filter -> Map.entry(
-                    "condition_" + conditionId.incrementAndGet() + "_" + filter.getId(),
-                    new FilterCondition(filter)
-                ))
+                .map(
+                    filter -> Map.entry(
+                        "condition_" + conditionId.incrementAndGet() + "_" + filter.getId(),
+                        new FilterCondition(filter)
+                    )
+                )
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
             Map<String, Condition> conditions = HashMap.newHashMap(flowsCondition.size() + whereConditions.size());
             conditions.putAll(flowsCondition);
@@ -364,9 +621,47 @@ public class Flow extends AbstractTrigger implements TriggerOutput<Flow.Output> 
             return conditions;
         }
 
+        @JsonIgnore
+        public Map<String, Condition> getUpstreamFlowsConditions() {
+            AtomicInteger conditionId = new AtomicInteger();
+            return ListUtils.emptyOnNull(flows).stream()
+                .map(
+                    upstreamFlow -> Map.entry(
+                        "condition_" + conditionId.incrementAndGet(),
+                        new UpstreamFlowCondition(upstreamFlow)
+                    )
+                )
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+        }
+
+        @JsonIgnore
+        public Map<String, Condition> getWhereConditions() {
+            AtomicInteger conditionId = new AtomicInteger();
+            return ListUtils.emptyOnNull(where).stream()
+                .map(
+                    filter -> Map.entry(
+                        "condition_" + conditionId.incrementAndGet() + "_" + filter.getId(),
+                        new FilterCondition(filter)
+                    )
+                )
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+        }
+
         @Override
         public Logger logger() {
             return log;
+        }
+
+        @Override
+        @JsonIgnore
+        public Mode getMode() {
+            return Mode.ALL;
+        }
+
+        @Override
+        @JsonIgnore
+        public Integer getMinSatisfied() {
+            return null;
         }
     }
 
@@ -374,19 +669,19 @@ public class Flow extends AbstractTrigger implements TriggerOutput<Flow.Output> 
     @Getter
     public static class UpstreamFlow {
         @NotNull
-        @Schema(title = "The namespace of the flow.")
+        @Schema(title = "The namespace of the flow")
         @PluginProperty
         private String namespace;
 
-        @Schema(title = "The flow id.")
+        @Schema(title = "The flow ID")
         @PluginProperty
         private String flowId;
 
-        @Schema(title = "The execution states.")
+        @Schema(title = "The execution states")
         @PluginProperty
         private List<State.Type> states;
 
-        @Schema(title = "A key/value map of labels.")
+        @Schema(title = "A key/value map of labels")
         @PluginProperty
         private Map<String, Object> labels;
     }
@@ -435,19 +730,19 @@ public class Flow extends AbstractTrigger implements TriggerOutput<Flow.Output> 
         @NotNull
         @NotEmpty
         @PluginProperty
-        @Schema(title = "A unique identifier for the filter.")
+        @Schema(title = "A unique identifier for the filter")
         private String id;
 
         @Builder.Default
         @PluginProperty
-        @Schema(title = "The operand to apply between all filters of the precondition.")
+        @Schema(title = "The operand to apply between all filters of the precondition")
         private Operand operand = Operand.AND;
 
         @NotNull
         @NotEmpty
         @Valid
         @PluginProperty
-        @Schema(title = "The list of filters.")
+        @Schema(title = "The list of filters")
         private List<Filter> filters;
     }
 
@@ -463,28 +758,28 @@ public class Flow extends AbstractTrigger implements TriggerOutput<Flow.Output> 
         @NotNull
         @PluginProperty
         @Schema(
-            title = "The field which will be filtered."
+            title = "The field which will be filtered"
         )
         private Field field;
 
         @NotNull
         @PluginProperty
         @Schema(
-            title = "The type of filter.",
+            title = "The type of filter",
             description = "Can be set to one of the following: `EQUAL_TO`, `NOT_EQUAL_TO`, `IS_NULL`, `IS_NOT_NULL`, `IS_TRUE`, `IS_FALSE`, `STARTS_WITH`, `ENDS_WITH`, `REGEX`, `CONTAINS`. Depending on the `type`, you will need to also set the `value` or `values` property."
         )
         private Type type;
 
         @PluginProperty
         @Schema(
-            title = "The single value to filter the `field` on.",
+            title = "The single value to filter the `field` on",
             description = "Must be set according to its `type`."
         )
         private String value;
 
         @PluginProperty
         @Schema(
-            title = "The list of values to filter the `field` on.",
+            title = "The list of values to filter the `field` on",
             description = "Must be set for the following types: IN, NOT_IN."
         )
         private List<String> values;
@@ -565,27 +860,47 @@ public class Flow extends AbstractTrigger implements TriggerOutput<Flow.Output> 
     @NoArgsConstructor
     @AllArgsConstructor
     public static class Output implements io.kestra.core.models.tasks.Output {
-        @Schema(title = "The execution ID that triggered the current flow.")
+        @Schema(
+            title = "The execution ID that triggered the current flow",
+            description = "In case multiple executions triggered the current flow, this will be the last one."
+        )
         @NotNull
         private String executionId;
 
-        @Schema(title = "The execution state.")
+        @Schema(
+            title = "The execution labels that triggered the current flow",
+            description = "In case multiple executions triggered the current flow, this will be the last one.")
+        @NotNull
+        private Map<String, Object> executionLabels;
+
+        @Schema(
+            title = "The execution state",
+            description = "In case multiple executions triggered the current flow, this will be the last one.")
         @NotNull
         private State.Type state;
 
-        @Schema(title = "The namespace of the flow that triggered the current flow.")
+        @Schema(
+            title = "The namespace of the flow that triggered the current flow",
+            description = "In case multiple executions triggered the current flow, this will be the last one.")
         @NotNull
         private String namespace;
 
-        @Schema(title = "The flow ID whose execution triggered the current flow.")
+        @Schema(
+            title = "The flow ID whose execution triggered the current flow",
+            description = "In case multiple executions triggered the current flow, this will be the last one.")
         @NotNull
         private String flowId;
 
-        @Schema(title = "The flow revision that triggered the current flow.")
+        @Schema(
+            title = "The flow revision that triggered the current flow",
+            description = "In case multiple executions triggered the current flow, this will be the last one.")
         @NotNull
         private Integer flowRevision;
 
-        @Schema(title = "The extracted outputs from the flow that triggered the current flow.")
+        @Schema(
+            title = "The extracted outputs from the flows that triggered the current flow",
+            description = "As there can be multiple executions that trigger this flow, each output will be prefixed by its namespace and flow ID. For example, 'namespace.flowId.key' will be the key for the output 'key' from the flow with ID 'flowId' in namespace 'namespace'."
+        )
         private Map<String, Object> outputs;
     }
 }

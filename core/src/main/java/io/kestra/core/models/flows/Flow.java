@@ -1,36 +1,31 @@
 package io.kestra.core.models.flows;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.introspect.AnnotatedMember;
 import com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector;
+
 import io.kestra.core.exceptions.InternalException;
 import io.kestra.core.models.HasUID;
-import io.kestra.core.models.Label;
 import io.kestra.core.models.annotations.PluginProperty;
-import io.kestra.core.models.executions.Execution;
+import io.kestra.core.models.flows.check.Check;
 import io.kestra.core.models.flows.sla.SLA;
-import io.kestra.core.models.listeners.Listener;
 import io.kestra.core.models.tasks.FlowableTask;
 import io.kestra.core.models.tasks.Task;
 import io.kestra.core.models.tasks.retrys.AbstractRetry;
 import io.kestra.core.models.triggers.AbstractTrigger;
-import io.kestra.core.models.triggers.Trigger;
 import io.kestra.core.models.validations.ManualConstraintViolation;
 import io.kestra.core.serializers.JacksonMapper;
-import io.kestra.core.serializers.ListOrMapOfLabelDeserializer;
-import io.kestra.core.serializers.ListOrMapOfLabelSerializer;
-import io.kestra.core.services.FlowService;
-import io.kestra.core.utils.IdUtils;
 import io.kestra.core.utils.ListUtils;
 import io.kestra.core.validations.FlowValidation;
-import io.micronaut.core.annotation.Introspected;
+
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
@@ -38,46 +33,42 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import java.util.*;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
-
+/**
+ * A serializable flow with no source.
+ * <p>
+ * This class is planned for deprecation - use the {@link FlowWithSource}.
+ */
 @SuperBuilder(toBuilder = true)
 @Getter
 @NoArgsConstructor
-@Introspected
 @ToString
 @EqualsAndHashCode
 @FlowValidation
 public class Flow extends AbstractFlow implements HasUID {
     private static final ObjectMapper NON_DEFAULT_OBJECT_MAPPER = JacksonMapper.ofYaml()
         .copy()
-        .setSerializationInclusion(JsonInclude.Include.NON_DEFAULT);
+        .setDefaultPropertyInclusion(JsonInclude.Include.NON_DEFAULT);
 
     private static final ObjectMapper WITHOUT_REVISION_OBJECT_MAPPER = NON_DEFAULT_OBJECT_MAPPER.copy()
         .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true)
         .setAnnotationIntrospector(new JacksonAnnotationIntrospector() {
             @Override
             public boolean hasIgnoreMarker(final AnnotatedMember m) {
-                List<String> exclusions = Arrays.asList("revision", "deleted", "source");
+                List<String> exclusions = Arrays.asList("revision", "deleted", "source", "updated");
                 return exclusions.contains(m.getName()) || super.hasIgnoreMarker(m);
             }
         });
 
-    String description;
-
-    @JsonSerialize(using = ListOrMapOfLabelSerializer.class)
-    @JsonDeserialize(using = ListOrMapOfLabelDeserializer.class)
-    @Schema(implementation = Object.class, oneOf = {List.class, Map.class})
-    List<Label> labels;
-
+    @Schema(
+        type = "object",
+        additionalProperties = Schema.AdditionalPropertiesValue.FALSE
+    )
     Map<String, Object> variables;
 
     @Valid
     @NotEmpty
+    @Schema(additionalProperties = Schema.AdditionalPropertiesValue.TRUE)
     List<Task> tasks;
 
     @Valid
@@ -93,10 +84,6 @@ public class Flow extends AbstractFlow implements HasUID {
     }
 
     @Valid
-    @Deprecated
-    List<Listener> listeners;
-
-    @Valid
     List<Task> afterExecution;
 
     @Valid
@@ -104,20 +91,6 @@ public class Flow extends AbstractFlow implements HasUID {
 
     @Valid
     List<PluginDefault> pluginDefaults;
-
-    @Valid
-    List<PluginDefault> taskDefaults;
-
-    @Deprecated
-    public void setTaskDefaults(List<PluginDefault> taskDefaults) {
-        this.pluginDefaults = taskDefaults;
-        this.taskDefaults = taskDefaults;
-    }
-
-    @Deprecated
-    public List<PluginDefault> getTaskDefaults() {
-        return this.taskDefaults;
-    }
 
     @Valid
     Concurrency concurrency;
@@ -134,85 +107,33 @@ public class Flow extends AbstractFlow implements HasUID {
     AbstractRetry retry;
 
     @Valid
-    @PluginProperty(beta = true)
+    @PluginProperty
     List<SLA> sla;
 
-
-    public Logger logger() {
-        return LoggerFactory.getLogger("flow." + this.id);
-    }
-
-
-    /** {@inheritDoc **/
-    @Override
-    @JsonIgnore
-    public String uid() {
-        return Flow.uid(this.getTenantId(), this.getNamespace(), this.getId(), Optional.ofNullable(this.revision));
-    }
-
-    @JsonIgnore
-    public String uidWithoutRevision() {
-        return Flow.uidWithoutRevision(this.getTenantId(), this.getNamespace(), this.getId());
-    }
-
-    public static String uid(Execution execution) {
-        return IdUtils.fromParts(
-            execution.getTenantId(),
-            execution.getNamespace(),
-            execution.getFlowId(),
-            String.valueOf(execution.getFlowRevision())
-        );
-    }
-
-    public static String uid(String tenantId, String namespace, String id, Optional<Integer> revision) {
-        return IdUtils.fromParts(
-            tenantId,
-            namespace,
-            id,
-            String.valueOf(revision.orElse(-1))
-        );
-    }
-
-    public static String uidWithoutRevision(String tenantId, String namespace, String id) {
-        return IdUtils.fromParts(
-            tenantId,
-            namespace,
-            id
-        );
-    }
-
-    public static String uid(Trigger trigger) {
-        return IdUtils.fromParts(
-            trigger.getTenantId(),
-            trigger.getNamespace(),
-            trigger.getFlowId()
-        );
-    }
-
-    public static String uidWithoutRevision(Execution execution) {
-        return IdUtils.fromParts(
-            execution.getTenantId(),
-            execution.getNamespace(),
-            execution.getFlowId()
-        );
-    }
+    @Schema(
+        title = "Conditions evaluated before the flow is executed.",
+        description = "A list of conditions that are evaluated before the flow is executed.  If no checks are defined, the flow executes normally."
+    )
+    @Valid
+    @PluginProperty
+    List<Check> checks;
 
     public Stream<String> allTypes() {
         return Stream.of(
-                Optional.ofNullable(triggers).orElse(Collections.emptyList()).stream().map(AbstractTrigger::getType),
-                allTasks().map(Task::getType),
-                Optional.ofNullable(pluginDefaults).orElse(Collections.emptyList()).stream().map(PluginDefault::getType)
-            ).reduce(Stream::concat).orElse(Stream.empty())
+            Optional.ofNullable(triggers).orElse(Collections.emptyList()).stream().map(AbstractTrigger::getType),
+            allTasks().map(Task::getType),
+            Optional.ofNullable(pluginDefaults).orElse(Collections.emptyList()).stream().map(PluginDefault::getType)
+        ).reduce(Stream::concat).orElse(Stream.empty())
             .distinct();
     }
 
     public Stream<Task> allTasks() {
         return Stream.of(
-                this.tasks != null ? this.tasks : Collections.<Task>emptyList(),
-                this.errors != null ? this.errors : Collections.<Task>emptyList(),
-                this._finally != null ? this._finally : Collections.<Task>emptyList(),
-                this.afterExecutionTasks()
-            )
+            this.tasks != null ? this.tasks : Collections.<Task> emptyList(),
+            this.errors != null ? this.errors : Collections.<Task> emptyList(),
+            this._finally != null ? this._finally : Collections.<Task> emptyList(),
+            this.afterExecution != null ? this.afterExecution : Collections.<Task> emptyList()
+        )
             .flatMap(Collection::stream);
     }
 
@@ -255,17 +176,30 @@ public class Flow extends AbstractFlow implements HasUID {
             .toList();
     }
 
-    public List<Task> allErrorsWithChilds() {
+    public List<Task> allErrorsWithChildren() {
         var allErrors = allTasksWithChilds().stream()
             .filter(task -> task.isFlowable() && ((FlowableTask<?>) task).getErrors() != null)
             .flatMap(task -> ((FlowableTask<?>) task).getErrors().stream())
             .collect(Collectors.toCollection(ArrayList::new));
 
-        if (this.getErrors() != null && !this.getErrors().isEmpty()) {
+        if (!ListUtils.isEmpty(this.getErrors())) {
             allErrors.addAll(this.getErrors());
         }
 
         return allErrors;
+    }
+
+    public List<Task> allFinallyWithChildren() {
+        var allFinally = allTasksWithChilds().stream()
+            .filter(task -> task.isFlowable() && ((FlowableTask<?>) task).getFinally() != null)
+            .flatMap(task -> ((FlowableTask<?>) task).getFinally().stream())
+            .collect(Collectors.toCollection(ArrayList::new));
+
+        if (!ListUtils.isEmpty(this.getFinally())) {
+            allFinally.addAll(this.getFinally());
+        }
+
+        return allFinally;
     }
 
     public Task findParentTasksByTaskId(String taskId) {
@@ -299,56 +233,7 @@ public class Flow extends AbstractFlow implements HasUID {
             .orElse(null);
     }
 
-    /**
-     * @deprecated should not be used
-     */
-    @Deprecated(forRemoval = true, since = "0.21.0")
-    public Flow updateTask(String taskId, Task newValue) throws InternalException {
-        Task task = this.findTaskByTaskId(taskId);
-        Flow flow = this instanceof FlowWithSource flowWithSource ? flowWithSource.toFlow() : this;
-
-        Map<String, Object> map = NON_DEFAULT_OBJECT_MAPPER.convertValue(flow, JacksonMapper.MAP_TYPE_REFERENCE);
-
-        return NON_DEFAULT_OBJECT_MAPPER.convertValue(
-            recursiveUpdate(map, task, newValue),
-            Flow.class
-        );
-    }
-
-    private static Object recursiveUpdate(Object object, Task previous, Task newValue) {
-        if (object instanceof Map<?, ?> value) {
-            if (value.containsKey("id") && value.get("id").equals(previous.getId()) &&
-                value.containsKey("type") && value.get("type").equals(previous.getType())
-            ) {
-                return NON_DEFAULT_OBJECT_MAPPER.convertValue(newValue, JacksonMapper.MAP_TYPE_REFERENCE);
-            } else {
-                return value
-                    .entrySet()
-                    .stream()
-                    .map(e -> new AbstractMap.SimpleEntry<>(
-                        e.getKey(),
-                        recursiveUpdate(e.getValue(), previous, newValue)
-                    ))
-                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-            }
-        } else if (object instanceof Collection<?> value) {
-            return value
-                .stream()
-                .map(r -> recursiveUpdate(r, previous, newValue))
-                .toList();
-        } else {
-            return object;
-        }
-    }
-
-    private List<Task> afterExecutionTasks() {
-        return ListUtils.concat(
-            ListUtils.emptyOnNull(this.getListeners()).stream().flatMap(listener -> listener.getTasks().stream()).toList(),
-            this.getAfterExecution()
-        );
-    }
-
-    public boolean equalsWithoutRevision(Flow o) {
+    public boolean equalsWithoutRevision(FlowInterface o) {
         try {
             return WITHOUT_REVISION_OBJECT_MAPPER.writeValueAsString(this).equals(WITHOUT_REVISION_OBJECT_MAPPER.writeValueAsString(o));
         } catch (JsonProcessingException e) {
@@ -361,24 +246,28 @@ public class Flow extends AbstractFlow implements HasUID {
 
         // change flow id
         if (!updated.getId().equals(this.getId())) {
-            violations.add(ManualConstraintViolation.of(
-                "Illegal flow id update",
-                updated,
-                Flow.class,
-                "flow.id",
-                updated.getId()
-            ));
+            violations.add(
+                ManualConstraintViolation.of(
+                    "Illegal flow id update",
+                    updated,
+                    Flow.class,
+                    "flow.id",
+                    updated.getId()
+                )
+            );
         }
 
         // change flow namespace
         if (!updated.getNamespace().equals(this.getNamespace())) {
-            violations.add(ManualConstraintViolation.of(
-                "Illegal namespace update",
-                updated,
-                Flow.class,
-                "flow.namespace",
-                updated.getNamespace()
-            ));
+            violations.add(
+                ManualConstraintViolation.of(
+                    "Illegal namespace update",
+                    updated,
+                    Flow.class,
+                    "flow.namespace",
+                    updated.getNamespace()
+                )
+            );
         }
 
         if (!violations.isEmpty()) {
@@ -388,14 +277,7 @@ public class Flow extends AbstractFlow implements HasUID {
         }
     }
 
-    /**
-     * Convenience method to generate the source of a flow.
-     * Equivalent to <code>FlowService.generateSource(this);</code>
-     */
-    public String generateSource() {
-        return FlowService.generateSource(this);
-    }
-
+    @Override
     public Flow toDeleted() {
         return this.toBuilder()
             .revision(this.revision + 1)
@@ -403,7 +285,13 @@ public class Flow extends AbstractFlow implements HasUID {
             .build();
     }
 
-    public FlowWithSource withSource(String source) {
-        return FlowWithSource.of(this, source);
+    /**
+     * {@inheritDoc}
+     * To be conservative a flow MUST not return any source.
+     */
+    @Override
+    @Schema(hidden = true)
+    public String getSource() {
+        return null;
     }
 }

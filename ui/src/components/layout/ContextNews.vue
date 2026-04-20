@@ -1,6 +1,14 @@
 <template>
-    <context-info-content :title="t('feeds.title')">
-        <div class="post" :class="{lastPost: index === 0, expanded: expanded[feed.id]}" v-for="(feed, index) in feeds" :key="feed.id">
+    <ContextInfoContent ref="contextInfoRef" :title="$t('feeds.title')">
+        <div
+            class="post"
+            :class="{
+                lastPost: index === 0,
+                expanded: expanded[feed.id]
+            }"
+            v-for="(feed, index) in feeds"
+            :key="feed.id"
+        >
             <div v-if="feed.image" class="mr-2">
                 <img :src="feed.image" alt="">
             </div>
@@ -8,10 +16,9 @@
                 <h5>
                     {{ feed.title }}
                 </h5>
-                <date-ago class-name="news-date small" :inverted="true" :date="feed.publicationDate" format="LL" />
+                <DateAgo className="news-date small" :inverted="true" :date="feed.publicationDate" format="LL" :showTooltip="false" />
             </div>
-
-            <markdown class="markdown-tooltip mt-3 postParagraph" :source="feed.description" />
+            <Markdown class="markdown-tooltip postParagraph" :source="feed.description" />
 
             <div class="newsButtonBar">
                 <el-button
@@ -19,11 +26,11 @@
                     @click="expanded[feed.id] = !expanded[feed.id]"
                 >
                     <MenuDown class="expandIcon" />
-                    {{ expanded[feed.id] ? t("showLess") : t("showMore") }}
+                    {{ expanded[feed.id] ? $t("showLess") : $t("showMore") }}
                 </el-button>
                 <el-button
                     v-if="feed.href"
-                    :title="t('open in new tab')"
+                    :title="$t('open in new tab')"
                     tag="a"
                     type="primary"
                     target="_blank"
@@ -33,16 +40,15 @@
                 </el-button>
             </div>
 
-            <el-divider v-if="index !== feeds.length - 1" />
+            <el-divider class="mb-2" v-if="index !== feeds.length - 1" />
         </div>
-    </context-info-content>
+    </ContextInfoContent>
 </template>
 
-<script lang="ts" setup>
-    import {computed, onMounted, reactive} from "vue";
-    import {useStore} from "vuex";
-    import {useI18n} from "vue-i18n";
+<script setup lang="ts">
+    import {computed, onMounted, reactive, ref} from "vue";
     import {useStorage} from "@vueuse/core"
+    import {useScrollMemory} from "../../composables/useScrollMemory"
 
     import OpenInNew from "vue-material-design-icons/OpenInNew.vue";
     import MenuDown from "vue-material-design-icons/MenuDown.vue";
@@ -51,22 +57,29 @@
     import DateAgo from "./DateAgo.vue";
     import ContextInfoContent from "../ContextInfoContent.vue";
 
-    const store = useStore();
-    const {t} = useI18n({useScope: "global"});
+    import {useApiStore} from "../../stores/api";
 
-    const feeds = computed(() => store.state.api.feeds);
+    const apiStore = useApiStore();
 
-    const expanded = reactive({});
+    const contextInfoRef = ref<InstanceType<typeof ContextInfoContent> | null>(null);
+    const feeds = computed(() => apiStore.feeds);
+
+    const expanded = reactive<Record<string, boolean>>({});
 
     const lastNewsReadDate = useStorage<string | null>("feeds", null)
     onMounted(() => {
         lastNewsReadDate.value = feeds.value[0].publicationDate;
     });
+
+    const scrollableElement = computed(() => contextInfoRef.value?.contentRef || null)
+    useScrollMemory(ref("context-panel-news"), scrollableElement as any)
 </script>
 
-<style lang="scss" scoped>
+<style scoped lang="scss">
+    $post-line-height: 1.6;
+
     .post {
-        padding: 1rem;
+        padding: 1rem 1rem 0rem 1rem;
 
         h5 {
             margin-bottom: 0;
@@ -78,7 +91,7 @@
             max-width: 10rem;
             margin-right: 1rem;
             float: left;
-            border-radius: var(--border-radius-lg);
+            border-radius: var(--bs-border-radius-lg);
         }
 
         .metaBlock {
@@ -116,8 +129,7 @@
 
     .lastPost{
         .postParagraph {
-            -webkit-line-clamp: 6;
-            line-clamp: 6;
+            max-height: calc(6 * #{$post-line-height}em);
         }
 
         img {
@@ -131,14 +143,12 @@
     }
 
     .postParagraph {
-        display: -webkit-box;
-        -webkit-box-orient: vertical;
-        -webkit-line-clamp: 2;
-        line-clamp: 2;
+        max-height: calc(4 * #{$post-line-height}em);
         overflow: hidden;
-        line-height: 1.6;
+        line-height: $post-line-height;
         .expanded & {
-            -webkit-line-clamp: unset;
+            max-height: none;
+            overflow: visible;
         }
     }
 
@@ -148,6 +158,6 @@
     }
 
     :deep(.news-date) {
-        color: var(--bs-gray-700);
+        color: var(--ks-content-secondary);
     }
 </style>

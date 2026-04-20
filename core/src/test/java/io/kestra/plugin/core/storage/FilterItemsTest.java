@@ -1,17 +1,5 @@
 package io.kestra.plugin.core.storage;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import io.kestra.core.exceptions.IllegalVariableEvaluationException;
-import io.kestra.core.models.property.Property;
-import io.kestra.core.runners.RunContext;
-import io.kestra.core.runners.RunContextFactory;
-import io.kestra.core.serializers.JacksonMapper;
-import io.kestra.core.storages.StorageInterface;
-import io.kestra.core.junit.annotations.KestraTest;
-import jakarta.inject.Inject;
-import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.Test;
-
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -22,6 +10,21 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+
+import io.kestra.core.exceptions.IllegalVariableEvaluationException;
+import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.models.property.Property;
+import io.kestra.core.runners.RunContext;
+import io.kestra.core.runners.RunContextFactory;
+import io.kestra.core.serializers.JacksonMapper;
+import io.kestra.core.storages.StorageInterface;
+
+import jakarta.inject.Inject;
 
 @KestraTest
 class FilterItemsTest {
@@ -52,9 +55,9 @@ class FilterItemsTest {
 
         FilterItems task = FilterItems
             .builder()
-            .from(Property.of(generateKeyValueFile(TEST_VALID_ITEMS, runContext).toString()))
+            .from(Property.ofValue(generateKeyValueFile(TEST_VALID_ITEMS, runContext).toString()))
             .filterCondition(" {{ value % 2 == 0 }} ")
-            .filterType(Property.of(FilterItems.FilterType.INCLUDE))
+            .filterType(Property.ofValue(FilterItems.FilterType.INCLUDE))
             .build();
 
         // When
@@ -75,9 +78,9 @@ class FilterItemsTest {
 
         FilterItems task = FilterItems
             .builder()
-            .from(Property.of(generateKeyValueFile(TEST_VALID_ITEMS, runContext).toString()))
+            .from(Property.ofValue(generateKeyValueFile(TEST_VALID_ITEMS, runContext).toString()))
             .filterCondition(" {{ value % 2 == 0 }} ")
-            .filterType(Property.of(FilterItems.FilterType.EXCLUDE))
+            .filterType(Property.ofValue(FilterItems.FilterType.EXCLUDE))
             .build();
 
         // When
@@ -98,10 +101,10 @@ class FilterItemsTest {
 
         FilterItems task = FilterItems
             .builder()
-            .from(Property.of(generateKeyValueFile(TEST_INVALID_ITEMS, runContext).toString()))
+            .from(Property.ofValue(generateKeyValueFile(TEST_INVALID_ITEMS, runContext).toString()))
             .filterCondition(" {{ value % 2 == 0 }}")
-            .filterType(Property.of(FilterItems.FilterType.INCLUDE))
-            .errorOrNullBehavior(Property.of(FilterItems.ErrorOrNullBehavior.FAIL))
+            .filterType(Property.ofValue(FilterItems.FilterType.INCLUDE))
+            .errorOrNullBehavior(Property.ofValue(FilterItems.ErrorOrNullBehavior.FAIL))
             .build();
 
         // When/Then
@@ -115,10 +118,10 @@ class FilterItemsTest {
 
         FilterItems task = FilterItems
             .builder()
-            .from(Property.of(generateKeyValueFile(TEST_INVALID_ITEMS, runContext).toString()))
+            .from(Property.ofValue(generateKeyValueFile(TEST_INVALID_ITEMS, runContext).toString()))
             .filterCondition(" {{ value % 2 == 0 }}")
-            .filterType(Property.of(FilterItems.FilterType.INCLUDE))
-            .errorOrNullBehavior(Property.of(FilterItems.ErrorOrNullBehavior.INCLUDE))
+            .filterType(Property.ofValue(FilterItems.FilterType.INCLUDE))
+            .errorOrNullBehavior(Property.ofValue(FilterItems.ErrorOrNullBehavior.INCLUDE))
             .build();
 
         // When
@@ -139,10 +142,10 @@ class FilterItemsTest {
 
         FilterItems task = FilterItems
             .builder()
-            .from(Property.of(generateKeyValueFile(TEST_INVALID_ITEMS, runContext).toString()))
+            .from(Property.ofValue(generateKeyValueFile(TEST_INVALID_ITEMS, runContext).toString()))
             .filterCondition(" {{ value % 2 == 0 }}")
-            .filterType(Property.of(FilterItems.FilterType.INCLUDE))
-            .errorOrNullBehavior(Property.of(FilterItems.ErrorOrNullBehavior.EXCLUDE))
+            .filterType(Property.ofValue(FilterItems.FilterType.INCLUDE))
+            .errorOrNullBehavior(Property.ofValue(FilterItems.ErrorOrNullBehavior.EXCLUDE))
             .build();
 
         // When
@@ -163,10 +166,10 @@ class FilterItemsTest {
 
         FilterItems task = FilterItems
             .builder()
-            .from(Property.of(generateKeyValueFile(TEST_VALID_ITEMS, runContext).toString()))
+            .from(Property.ofValue(generateKeyValueFile(TEST_VALID_ITEMS, runContext).toString()))
             .filterCondition("{{ value }}")
-            .filterType(Property.of(FilterItems.FilterType.INCLUDE))
-            .errorOrNullBehavior(Property.of(FilterItems.ErrorOrNullBehavior.FAIL))
+            .filterType(Property.ofValue(FilterItems.FilterType.INCLUDE))
+            .errorOrNullBehavior(Property.ofValue(FilterItems.ErrorOrNullBehavior.FAIL))
             .build();
 
         // When
@@ -181,14 +184,17 @@ class FilterItemsTest {
     }
 
     private static <T> void assertFile(final RunContext runContext,
-                                       final FilterItems.Output output,
-                                       final List<T> expected,
-                                       final Class<T> type) throws IOException {
-        try (InputStream resource = runContext.storage().getFile(output.getUri());
-             InputStreamReader inputStreamReader = new InputStreamReader(resource, StandardCharsets.UTF_8);
-             BufferedReader bufferedReader = new BufferedReader(inputStreamReader)) {
+        final FilterItems.Output output,
+        final List<T> expected,
+        final Class<T> type) throws IOException {
+        try (
+            InputStream resource = runContext.storage().getFile(output.getUri());
+            InputStreamReader inputStreamReader = new InputStreamReader(resource, StandardCharsets.UTF_8);
+            BufferedReader bufferedReader = new BufferedReader(inputStreamReader)
+        ) {
             List<T> list = bufferedReader.lines()
-                .map(line -> {
+                .map(line ->
+                {
                     try {
                         return JacksonMapper.ofIon().readValue(line, type);
                     } catch (JsonProcessingException e) {
@@ -202,7 +208,8 @@ class FilterItemsTest {
     private URI generateKeyValueFile(final List<?> items, RunContext runContext) throws IOException {
         Path path = runContext.workingDir().createTempFile(".ion");
         try (final BufferedWriter writer = Files.newBufferedWriter(path)) {
-            items.forEach(object -> {
+            items.forEach(object ->
+            {
                 try {
                     writer.write(JacksonMapper.ofIon().writeValueAsString(object));
                     writer.newLine();
@@ -214,5 +221,6 @@ class FilterItemsTest {
         return runContext.storage().putFile(path.toFile());
     }
 
-    record KeyValue(String key, Object value) { }
+    record KeyValue(String key, Object value) {
+    }
 }

@@ -1,21 +1,18 @@
 package io.kestra.core.runners;
 
-import io.kestra.core.encryption.EncryptionService;
-import io.kestra.core.models.tasks.common.EncryptedString;
-import jakarta.annotation.Nullable;
+import java.security.GeneralSecurityException;
+import java.util.*;
+import java.util.function.Supplier;
+
 import org.slf4j.Logger;
 
-import java.security.GeneralSecurityException;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.function.Supplier;
+import io.kestra.core.encryption.EncryptionService;
+import io.kestra.core.models.tasks.common.EncryptedString;
 
 final class Secret {
 
     private final Optional<String> secretKey;
-    private final  Supplier<Logger> logger;
+    private final Supplier<Logger> logger;
 
     Secret(final Optional<String> secretKey, final Supplier<Logger> logger) {
         this.secretKey = Objects.requireNonNull(secretKey, "secretKey cannot be null");
@@ -40,20 +37,23 @@ final class Secret {
         }
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
+    @SuppressWarnings({ "unchecked", "rawtypes" })
     Map<String, Object> decrypt(final Map<String, Object> data) {
-        Map<String, Object> decryptedMap = new HashMap<>(data);
-        for (var entry: data.entrySet()) {
+        Map<String, Object> decryptedMap = new LinkedHashMap<>(data);
+        for (var entry : data.entrySet()) {
             if (entry.getValue() instanceof Map map) {
                 // if some value are of type EncryptedString we decode them and replace the object
-                if (EncryptedString.TYPE.equalsIgnoreCase((String)map.get("type"))) {
+                if (map.get("type") instanceof String typeStr && EncryptedString.TYPE.equalsIgnoreCase(typeStr)) {
                     try {
                         String decoded = decrypt((String) map.get("value"));
                         decryptedMap.put(entry.getKey(), decoded);
-                    } catch (GeneralSecurityException e) {
-                        throw new RuntimeException(e);
+                    } catch (GeneralSecurityException | IllegalArgumentException e) {
+                        // NOTE: in rare cases, if for ex a Worker didn't have the encryption but an Executor has it,
+                        // we can have a non-encrypted output that we try to decrypt, this will lead to an IllegalArgumentException.
+                        // As it could break the executor, the best is to do nothing in this case and only log an error.
+                        logger.get().warn("Unable to decrypt the output", e);
                     }
-                }  else {
+                } else {
                     decryptedMap.put(entry.getKey(), decrypt((Map<String, Object>) map));
                 }
             }

@@ -4,9 +4,9 @@
             trigger="click"
             :content="$t('copied')"
             placement="left"
-            :auto-close="2000"
+            :autoClose="2000"
         >
-            <el-button :icon="ContentCopy" type="default" @click="copyText">
+            <el-button :icon="ContentCopy" type="default" :link @click="copyText">
                 <span v-if="label">{{ label }}</span>
             </el-button>
         </el-tooltip>
@@ -19,7 +19,7 @@
     import ContentCopy from "vue-material-design-icons/ContentCopy.vue";
     import Utils from "../../utils/utils";
 
-    const props = defineProps<{ text: string; label?: string }>();
+    const props = defineProps<{ text: string; label?: string, link?: boolean }>();
 
     const copyText = () => Utils.copy(props.text);
 </script>

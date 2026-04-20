@@ -1,24 +1,27 @@
 package io.kestra.repository.postgres;
 
+import java.util.Map;
+
+import org.jooq.Condition;
+
 import io.kestra.core.models.QueryFilter;
-import io.kestra.core.models.flows.Flow;
+import io.kestra.core.models.flows.FlowInterface;
+import io.kestra.core.repositories.RepositoryBean;
 import io.kestra.jdbc.repository.AbstractJdbcFlowRepository;
+import io.kestra.jdbc.services.JdbcFilterService;
+
 import io.micronaut.context.ApplicationContext;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
-import jakarta.inject.Singleton;
-import org.jooq.Condition;
 
-import java.util.List;
-import java.util.Map;
-
-@Singleton
+@RepositoryBean
 @PostgresRepositoryEnabled
 public class PostgresFlowRepository extends AbstractJdbcFlowRepository {
     @Inject
-    public PostgresFlowRepository(@Named("flows") PostgresRepository<Flow> repository,
-                                  ApplicationContext applicationContext) {
-        super(repository, applicationContext);
+    public PostgresFlowRepository(@Named("flows") PostgresRepository<FlowInterface> repository,
+        ApplicationContext applicationContext,
+        JdbcFilterService filterService) {
+        super(repository, applicationContext, filterService);
     }
 
     @Override
@@ -28,12 +31,16 @@ public class PostgresFlowRepository extends AbstractJdbcFlowRepository {
 
     @Override
     protected Condition findCondition(Object value, QueryFilter.Op operation) {
-        return PostgresFlowRepositoryService.findCondition( value, operation);
+        return PostgresFlowRepositoryService.findCondition(value, operation);
     }
-
 
     @Override
     protected Condition findSourceCodeCondition(String query) {
         return PostgresFlowRepositoryService.findSourceCodeCondition(this.jdbcRepository, query);
+    }
+
+    @Override
+    protected Condition findTriggerClassCondition(Class<? extends io.kestra.core.models.triggers.AbstractTrigger> triggerClass) {
+        return PostgresFlowRepositoryService.findTriggerClassCondition(triggerClass);
     }
 }

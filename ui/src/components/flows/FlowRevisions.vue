@@ -1,266 +1,133 @@
 <template>
-    <div class="flow-revision" v-if="revisions && revisions.length > 1">
-        <el-select v-model="sideBySide" class="mb-3">
-            <el-option
-                v-for="item in displayTypes"
-                :key="item.value"
-                :label="item.text"
-                :value="item.value"
-            />
-        </el-select>
-        <el-row :gutter="15">
-            <el-col :span="12" v-if="revisionLeftIndex !== undefined">
-                <div class="revision-select mb-3">
-                    <el-select v-model="revisionLeftIndex" @change="addQuery">
-                        <el-option
-                            v-for="item in options(revisionRightIndex)"
-                            :key="item.value"
-                            :label="item.text"
-                            :value="item.value"
-                        />
-                    </el-select>
-                    <el-button-group>
-                        <el-button :icon="FileCode" @click="seeRevision(revisionLeftIndex, revisionLeftText)">
-                            <span class="d-none d-lg-inline-block">&nbsp;{{ $t('see full revision') }}</span>
-                        </el-button>
-                        <el-button :icon="Restore" :disabled="revisionNumber(revisionLeftIndex) === flow.revision" @click="restoreRevision(revisionLeftIndex, revisionLeftText)">
-                            <span class="d-none d-lg-inline-block">&nbsp;{{ $t('restore') }}</span>
-                        </el-button>
-                    </el-button-group>
-                </div>
-
-                <crud class="mt-3" permission="FLOW" :detail="{namespace: $route.params.namespace, flowId: $route.params.id, revision: revisionNumber(revisionLeftIndex)}" />
-            </el-col>
-            <el-col :span="12" v-if="revisionRightIndex !== undefined">
-                <div class="revision-select mb-3">
-                    <el-select v-model="revisionRightIndex" @change="addQuery">
-                        <el-option
-                            v-for="item in options(revisionLeftIndex)"
-                            :key="item.value"
-                            :label="item.text"
-                            :value="item.value"
-                        />
-                    </el-select>
-                    <el-button-group>
-                        <el-button :icon="FileCode" @click="seeRevision(revisionRightIndex, revisionRightText)">
-                            <span class="d-none d-lg-inline-block">&nbsp;{{ $t('see full revision') }}</span>
-                        </el-button>
-                        <el-button :icon="Restore" :disabled="revisionNumber(revisionRightIndex) === flow.revision" @click="restoreRevision(revisionRightIndex, revisionRightText)">
-                            <span class="d-none d-lg-inline-block">&nbsp;{{ $t('restore') }}</span>
-                        </el-button>
-                    </el-button-group>
-                </div>
-
-                <crud class="mt-3" permission="FLOW" :detail="{namespace: $route.params.namespace, flowId: $route.params.id, revision: revisionNumber(revisionRightIndex)}" />
-            </el-col>
-        </el-row>
-
-        <editor
-            class="mt-1"
-            v-if="revisionLeftText && revisionRightText"
-            :diff-side-by-side="sideBySide"
-            :model-value="revisionRightText"
-            :original="revisionLeftText"
-            lang="yaml"
-            :show-doc="false"
-        />
-
-        <drawer v-if="isModalOpen" v-model="isModalOpen">
-            <template #header>
-                <h5>{{ $t("revision") + `: ` + revision }}</h5>
-            </template>
-
-            <editor v-model="revisionYaml" lang="yaml" :full-height="false" :input="true" :navbar="false" :read-only="true" />
-        </drawer>
-    </div>
-    <div v-else>
-        <el-alert class="mb-0" show-icon :closable="false">
-            {{ $t('no revisions found') }}
-        </el-alert>
-    </div>
+    <Revisions
+        v-if="revisions.length > 0"
+        lang="yaml"
+        :revisions="flowRevisions"
+        :revisionSource="loadRevisionContent"
+        @restore="restoreRevision"
+        @deleted="onRevisionDeleted"
+        class="flow-revisions"
+    >
+        <template #crud="{revision}">
+            <Crud permission="FLOW" :detail="{resourceType: 'FLOW', namespace: route.params.namespace, flowId: route.params.id, revision}" />
+        </template>
+    </Revisions>
 </template>
 
-<script setup>
-    import FileCode from "vue-material-design-icons/FileCode.vue";
-    import Restore from "vue-material-design-icons/Restore.vue";
-</script>
-
-<script>
-    import {mapState} from "vuex";
-    import Editor from "../../components/inputs/Editor.vue";
+<script setup lang="ts">
+    import {computed, onMounted, ref, watch} from "vue";
+    import {useRoute, useRouter} from "vue-router";
     import Crud from "override/components/auth/Crud.vue";
-    import Drawer from "../Drawer.vue";
-    import {saveFlowTemplate} from "../../utils/flowTemplate";
+    import Revisions from "../layout/Revisions.vue";
 
-    export default {
-        components: {Editor, Crud, Drawer},
-        created() {
-            this.load();
-        },
-        methods: {
-            load() {
-                const currentRevision = this.flow.revision;
+    import {useToast} from "../../utils/toast";
+    import {useFlowStore} from "../../stores/flow";
+    const route = useRoute();
+    const router = useRouter();
+    const toast = useToast();
 
-                this.revisions = [...Array(currentRevision).keys()].map(((k, i) => {
-                    if (currentRevision === this.revisionNumber(i)) {
-                        return this.flow;
-                    }
-                    return {revision: i + 1};
-                }));
+    const flowStore = useFlowStore();
+    const flow = computed(() => flowStore.flow);
+    const storeRevisions = computed(() => flowStore.revisions);
 
-                if (this.$route.query.revisionRight) {
-                    this.revisionRightIndex = this.revisionIndex(
-                        this.$route.query.revisionRight
-                    );
-                    if (
-                        !this.$route.query.revisionLeft &&
-                        this.revisionRightIndex > 0
-                    ) {
-                        this.revisionLeftIndex = this.revisionRightIndex - 1;
-                    }
-                } else if (currentRevision > 0) {
-                    this.revisionRightIndex = currentRevision - 1;
-                }
+    // Load revisions from API only if not already in store
+    onMounted(async () => {
+        if (flow.value && (!storeRevisions.value || storeRevisions.value.length === 0)) {
+            await flowStore.loadRevisions({
+                namespace: flow.value.namespace,
+                id: flow.value.id
+            });
+        }
+    });
 
-                if (this.$route.query.revisionLeft) {
-                    this.revisionLeftIndex = this.revisionIndex(
-                        this.$route.query.revisionLeft
-                    );
-                } else if (currentRevision > 1) {
-                    this.revisionLeftIndex = currentRevision - 2;
-                }
-            },
-            revisionIndex(revision) {
-                const revisionInt = parseInt(revision);
+    // Watch for flow changes to reload revisions
+    watch(flow, async (newFlow) => {
+        if (newFlow && (!storeRevisions.value || storeRevisions.value.length === 0)) {
+            await flowStore.loadRevisions({
+                namespace: newFlow.namespace,
+                id: newFlow.id
+            });
+        }
+    });
 
-                if (revisionInt < 1 || revisionInt > this.revisions.length) {
-                    return undefined;
-                }
+    const revisions = ref<Array<{revision: number}>>([]);
 
-                return revisionInt - 1;
-            },
-            revisionNumber(index) {
-                return index + 1;
-            },
-            seeRevision(index, revision) {
-                this.revisionId = index
-                this.revisionYaml = revision
-                this.revision = this.revisionNumber(index)
-                this.isModalOpen = true;
-            },
-            restoreRevision(index, revision) {
-                this.$toast()
-                    .confirm(this.$t("restore confirm", {revision: this.revisionNumber(index)}), () => {
-                        return saveFlowTemplate(this, revision, "flow")
-                            .then(this.load)
-                            .then(() => {
-                                this.$router.push({query: {}});
-                            });
-                    });
-            },
-            addQuery() {
-                this.$router.push({query: {
-                    ...this.$route.query,
-                    ...{revisionLeft:this.revisionLeftIndex + 1, revisionRight: this.revisionRightIndex + 1}}
-                });
-            },
-            async fetchRevision(revision) {
-                const revisionFetched = await this.$store.dispatch("flow/loadFlow", {
-                    namespace: this.flow.namespace,
-                    id: this.flow.id,
-                    revision,
-                    allowDeleted: true,
-                    store: false
-                });
-                this.revisions[this.revisionIndex(revision)] = revisionFetched;
+    async function fetchRevisions() {
+        const namespace = (route.params.namespace as string) ?? "";
+        const id = (route.params.id as string) ?? "";
+        if (!namespace || !id) {
+            revisions.value = [];
+            return;
+        }
 
-                return revisionFetched;
-            },
-            options(excludeRevisionIndex) {
-                return this.revisions
-                    .filter((_, index) => index !== excludeRevisionIndex)
-                    .map(({revision}) => ({value: this.revisionIndex(revision), text: revision}));
-            }
-        },
-        computed: {
-            ...mapState("flow", ["flow"])
-        },
-        watch: {
-            revisionLeftIndex: async function (newValue, oldValue) {
-                if (newValue === oldValue) {
-                    return;
-                }
+        try {
+            const loaded = await flowStore.loadRevisions({
+                namespace,
+                id
+            });
+            revisions.value = loaded ?? [];
+        } catch (err) {
+            console.error("Failed to load revisions", err);
+            revisions.value = [];
+        }
+    }
 
-                if (newValue === undefined) {
-                    this.revisionLeftText = undefined;
-                }
+    onMounted(fetchRevisions);
 
-                const leftRevision = this.revisions[newValue];
-                let source = leftRevision.source;
-                if (!source) {
-                    source = (await this.fetchRevision(leftRevision.revision)).source;
-                }
+    const flowRevisions = computed(() => {
+        // Use store revisions if available (includes updated)
+        if (storeRevisions.value && storeRevisions.value.length > 0) {
+            return storeRevisions.value;
+        }
 
-                this.revisionLeftText = source;
-            },
-            revisionRightIndex: async function (newValue, oldValue) {
-                if (newValue === oldValue) {
-                    return;
-                }
+        // Fallback to generating from flow.revision count (no timestamps)
+        if (!flow.value) {
+            return revisions.value;
+        }
+        return [...Array(flow.value.revision).keys()].map(idx => ({revision: idx + 1}));
+    })
 
-                if (newValue === undefined) {
-                    this.revisionRightText = undefined;
-                }
+    async function restoreRevision(revisionSource: string) {
+        return flowStore.saveFlow({flow: revisionSource})
+            .then((response:any) => {
+                toast.saved(response.id);
+            })
+            .then(() => {
+                return flowStore.initYamlSource();
+            })
+            .then(() => {
+                router.push({query: {}});
+            });
+    }
 
-                const rightRevision = this.revisions[newValue];
-                let source = rightRevision.source;
-                if (!source) {
-                    source = (await this.fetchRevision(rightRevision.revision)).source;
-                }
+    async function loadRevisionContent(revision: number) {
+        if (revision === undefined) {
+            return undefined;
+        }
 
-                this.revisionRightText = source;
-            }
-        },
-        data() {
-            return {
-                revisionLeftIndex: undefined,
-                revisionRightIndex: undefined,
-                revisionLeftText: undefined,
-                revisionRightText: undefined,
-                revision: undefined,
-                revisions: [],
-                revisionId: undefined,
-                revisionYaml: undefined,
-                sideBySide: true,
-                displayTypes: [
-                    {value: true, text: this.$t("side-by-side")},
-                    {value: false, text:  this.$t("line-by-line")},
-                ],
-                isModalOpen: false
-            };
-        },
-    };
+        return (await flowStore.loadFlow({
+            namespace: flow.value?.namespace ?? "",
+            id: flow.value?.id ?? "",
+            revision: revision.toString(),
+            allowDeleted: true,
+            store: false
+        })).source;
+    }
+
+    async function onRevisionDeleted(revision: number) {
+        const updatedQuery = {...route.query};
+        for (const key of ["revisionLeft", "revisionRight"]) {
+            if ((updatedQuery as any)[key]?.toString() === `${revision}`) delete (updatedQuery)[key];
+        }
+        await router.push({query: updatedQuery});
+        await fetchRevisions();
+    }
+
+    watch(() => [route.params.namespace, route.params.id], fetchRevisions);
 </script>
 
 <style scoped lang="scss">
-    .flow-revision {
-        display: flex;
-        flex-direction: column;
-        min-height: 100%;
-    }
-
-    .ks-editor {
-        flex: 1;
-        padding-bottom: 1rem;
-    }
-
-    .revision-select {
-        display: flex;
-
-        > div {
-            &:first-child {
-                flex: 2;
-            }
-        }
+    .flow-revisions {
+        min-height: calc(100vh - 190px);
     }
 </style>

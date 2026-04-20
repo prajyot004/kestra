@@ -1,16 +1,5 @@
 package io.kestra.plugin.core.storage;
 
-import com.google.common.io.CharStreams;
-import io.kestra.core.models.property.Property;
-import io.kestra.core.runners.RunContext;
-import io.kestra.core.runners.RunContextFactory;
-import io.kestra.core.storages.StorageInterface;
-import io.kestra.core.utils.Rethrow;
-import io.kestra.core.junit.annotations.KestraTest;
-import jakarta.inject.Inject;
-import org.apache.commons.lang3.StringUtils;
-import org.junit.jupiter.api.Test;
-
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -22,14 +11,28 @@ import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.endsWith;
-import static org.hamcrest.Matchers.is;
+import org.apache.commons.lang3.StringUtils;
+import org.junit.jupiter.api.Test;
+
+import com.google.common.io.CharStreams;
+
+import io.kestra.core.context.TestRunContextFactory;
+import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.models.property.Property;
+import io.kestra.core.runners.RunContext;
+import io.kestra.core.storages.StorageInterface;
+import io.kestra.core.utils.IdUtils;
+import io.kestra.core.utils.Rethrow;
+
+import jakarta.inject.Inject;
+
+import static io.kestra.core.tenant.TenantService.MAIN_TENANT;
+import static org.assertj.core.api.Assertions.assertThat;
 
 @KestraTest
 class SplitTest {
     @Inject
-    RunContextFactory runContextFactory;
+    TestRunContextFactory runContextFactory;
 
     @Inject
     StorageInterface storageInterface;
@@ -40,15 +43,15 @@ class SplitTest {
         URI put = storageUpload(1000);
 
         Split result = Split.builder()
-            .from(Property.of(put.toString()))
-            .partitions(Property.of(8))
+            .from(Property.ofValue(put.toString()))
+            .partitions(Property.ofValue(8))
             .build();
 
         Split.Output run = result.run(runContext);
 
-        assertThat(run.getUris().size(), is(8));
-        assertThat(run.getUris().getFirst().getPath(), endsWith(".yml"));
-        assertThat(StringUtils.countMatches(readAll(run.getUris()), "\n"), is(1000));
+        assertThat(run.getUris().size()).isEqualTo(8);
+        assertThat(run.getUris().getFirst().getPath()).endsWith(".yml");
+        assertThat(StringUtils.countMatches(readAll(run.getUris()), "\n")).isEqualTo(1000);
     }
 
     @Test
@@ -57,14 +60,14 @@ class SplitTest {
         URI put = storageUpload(1000);
 
         Split result = Split.builder()
-            .from(Property.of(put.toString()))
-            .rows(Property.of(10))
+            .from(Property.ofValue(put.toString()))
+            .rows(Property.ofValue(10))
             .build();
 
         Split.Output run = result.run(runContext);
 
-        assertThat(run.getUris().size(), is(100));
-        assertThat(readAll(run.getUris()), is(String.join("\n", content(1000)) + "\n"));
+        assertThat(run.getUris().size()).isEqualTo(100);
+        assertThat(readAll(run.getUris())).isEqualTo(String.join("\n", content(1000)) + "\n");
     }
 
     @Test
@@ -73,14 +76,34 @@ class SplitTest {
         URI put = storageUpload(12288);
 
         Split result = Split.builder()
-            .from(Property.of(put.toString()))
-            .bytes(Property.of("1KB"))
+            .from(Property.ofValue(put.toString()))
+            .bytes(Property.ofValue("1KB"))
             .build();
 
         Split.Output run = result.run(runContext);
 
-        assertThat(run.getUris().size(), is(251));
-        assertThat(readAll(run.getUris()), is(String.join("\n", content(12288)) + "\n"));
+        assertThat(run.getUris().size()).isEqualTo(251);
+        assertThat(readAll(run.getUris())).isEqualTo(String.join("\n", content(12288)) + "\n");
+    }
+
+    @Test
+    void regexPattern() throws Exception {
+        RunContext runContext = runContextFactory.of();
+        URI put = storageUploadWithRegexContent();
+
+        Split result = Split.builder()
+            .from(Property.ofValue(put.toString()))
+            .regexPattern(Property.ofValue("\\[(\\w+)\\]"))
+            .build();
+
+        Split.Output run = result.run(runContext);
+        assertThat(run.getUris().size()).isEqualTo(3);
+
+        String allContent = readAll(run.getUris());
+        assertThat(allContent).contains("[ERROR] Error message 1");
+        assertThat(allContent).contains("[WARN] Warning message 1");
+        assertThat(allContent).contains("[INFO] Info message 1");
+        assertThat(allContent).contains("[ERROR] Error message 2");
     }
 
     private List<String> content(int count) {
@@ -93,10 +116,9 @@ class SplitTest {
     private String readAll(List<URI> uris) throws IOException {
         return uris
             .stream()
-            .map(Rethrow.throwFunction(uri -> CharStreams.toString(new InputStreamReader(storageInterface.get(null, null, uri)))))
+            .map(Rethrow.throwFunction(uri -> CharStreams.toString(new InputStreamReader(storageInterface.get(MAIN_TENANT, null, uri)))))
             .collect(Collectors.joining());
     }
-
 
     URI storageUpload(int count) throws URISyntaxException, IOException {
         File tempFile = File.createTempFile("unit", "");
@@ -104,9 +126,33 @@ class SplitTest {
         Files.write(tempFile.toPath(), content(count));
 
         return storageInterface.put(
+            MAIN_TENANT,
             null,
+            new URI("/file/storage/%s/get.yml".formatted(IdUtils.create())),
+            new FileInputStream(tempFile)
+        );
+    }
+
+    URI storageUploadWithRegexContent() throws URISyntaxException, IOException {
+        File tempFile = File.createTempFile("unit", "");
+
+        List<String> regexContent = List.of(
+            "[ERROR] Error message 1",
+            "[WARN] Warning message 1",
+            "[INFO] Info message 1",
+            "[ERROR] Error message 2",
+            "[WARN] Warning message 2",
+            "[INFO] Info message 2",
+            "Line without pattern",
+            "[ERROR] Error message 3"
+        );
+
+        Files.write(tempFile.toPath(), regexContent);
+
+        return storageInterface.put(
+            MAIN_TENANT,
             null,
-            new URI("/file/storage/get.yml"),
+            new URI("/file/storage/%s/get.yml".formatted(IdUtils.create())),
             new FileInputStream(tempFile)
         );
     }

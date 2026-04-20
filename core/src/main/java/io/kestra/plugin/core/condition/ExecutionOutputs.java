@@ -1,23 +1,22 @@
 package io.kestra.plugin.core.condition;
 
+import java.util.Map;
+
 import io.kestra.core.exceptions.InternalException;
 import io.kestra.core.models.annotations.Example;
 import io.kestra.core.models.annotations.Plugin;
-import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.conditions.Condition;
 import io.kestra.core.models.conditions.ConditionContext;
-import io.kestra.core.models.conditions.ScheduleCondition;
 import io.kestra.core.models.executions.Execution;
+import io.kestra.core.models.property.Property;
+
 import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
 import lombok.experimental.SuperBuilder;
-
-import java.util.Map;
 
 import static io.kestra.core.utils.MapUtils.mergeWithNullableValues;
 
@@ -28,14 +27,17 @@ import static io.kestra.core.utils.MapUtils.mergeWithNullableValues;
 @NoArgsConstructor
 @Schema(
     title = "Condition based on the outputs of an upstream execution.",
-    description = "The condition returns `false` if the execution has no output. If the result is an empty string, a space, or `false`, the condition will also be considered as `false`."
+    description = """
+        Renders the provided boolean expression against the upstream execution outputs exposed under `trigger.outputs`.
+
+        If the execution exposes no outputs the condition is false and the expression is skipped. A rendered result of blank, space-only, or literal `false` is treated as false."""
 )
 @Plugin(
     examples = {
         @Example(
             title = """
-                The upstream `flow_a` must explicitly define its outputs 
-                to be used in the `ExecutionOutputs` condition. 
+                The upstream `flow_a` must explicitly define its outputs
+                to be used in the `ExecutionOutputs` condition.
 
                 ```yaml
                 id: flow_a
@@ -57,7 +59,7 @@ import static io.kestra.core.utils.MapUtils.mergeWithNullableValues;
                     value: "{{ outputs.hello.value }}"
                 ```
 
-                The `flow_condition_executionoutputs` will run whenever `flow_a` finishes successfully 
+                The `flow_condition_executionoutputs` will run whenever `flow_a` finishes successfully
                 and returns an output matching the value 'hello':
                 """,
             full = true,
@@ -81,17 +83,15 @@ import static io.kestra.core.utils.MapUtils.mergeWithNullableValues;
                 """
         )
     },
-    aliases = {"io.kestra.core.models.conditions.types.ExecutionOutputsCondition", "io.kestra.plugin.core.condition.ExecutionOutputsCondition"}
+    aliases = { "io.kestra.core.models.conditions.types.ExecutionOutputsCondition", "io.kestra.plugin.core.condition.ExecutionOutputsCondition" }
 )
-public class ExecutionOutputs extends Condition implements ScheduleCondition {
+public class ExecutionOutputs extends Condition {
 
     private static final String TRIGGER_VAR = "trigger";
     private static final String OUTPUTS_VAR = "outputs";
 
     @NotNull
-    @NotEmpty
-    @PluginProperty
-    private String expression;
+    private Property<Boolean> expression;
 
     /** {@inheritDoc} **/
     @SuppressWarnings("unchecked")
@@ -107,8 +107,7 @@ public class ExecutionOutputs extends Condition implements ScheduleCondition {
             Map.of(TRIGGER_VAR, Map.of(OUTPUTS_VAR, conditionContext.getExecution().getOutputs()))
         );
 
-        String render = conditionContext.getRunContext().render(expression, variables);
-        return !(render.isBlank() || render.isEmpty() || render.trim().equals("false"));
+        return conditionContext.getRunContext().render(expression).skipCache().as(Boolean.class, variables).orElseThrow();
     }
 
     private boolean hasNoOutputs(final Execution execution) {

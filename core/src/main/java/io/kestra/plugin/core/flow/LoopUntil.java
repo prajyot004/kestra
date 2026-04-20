@@ -1,6 +1,17 @@
 package io.kestra.plugin.core.flow;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+import io.kestra.core.models.hierarchies.AbstractGraph;
+import io.kestra.core.models.hierarchies.GraphCluster;
+import io.kestra.core.models.hierarchies.RelationType;
+import io.kestra.core.utils.GraphUtils;
+import org.slf4j.Logger;
+
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.models.annotations.Example;
 import io.kestra.core.models.annotations.Plugin;
@@ -9,30 +20,16 @@ import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.executions.NextTaskRun;
 import io.kestra.core.models.executions.TaskRun;
 import io.kestra.core.models.flows.State;
-import io.kestra.core.models.hierarchies.AbstractGraph;
-import io.kestra.core.models.hierarchies.GraphCluster;
-import io.kestra.core.models.hierarchies.RelationType;
-import io.kestra.core.models.tasks.FlowableTask;
-import io.kestra.core.models.tasks.ResolvedTask;
-import io.kestra.core.models.tasks.Task;
+import io.kestra.core.models.property.Property;
 import io.kestra.core.runners.FlowableUtils;
 import io.kestra.core.runners.RunContext;
-import io.kestra.core.utils.GraphUtils;
+import io.kestra.core.utils.MapUtils;
 import io.kestra.core.utils.TruthUtils;
-import io.micronaut.core.annotation.Introspected;
+
 import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
-import org.slf4j.Logger;
-
-import java.time.Duration;
-import java.time.Instant;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.stream.Stream;
 
 @SuperBuilder
 @ToString
@@ -40,12 +37,11 @@ import java.util.stream.Stream;
 @Getter
 @NoArgsConstructor
 @Schema(
-    title = "Run a list of tasks repeatedly until the expected condition is met.",
+    title = "Repeat tasks until a condition becomes true.",
     description = """
-        Use this task if your workflow requires blocking calls polling for a job to finish or for some external API to return a specific HTTP response.
+        Runs the child tasks in a loop, evaluating `condition` after each iteration. Condition is rendered and coerced to boolean; loop stops when true or when `maxIterations`/`maxDuration` in `checkFrequency` are hit (optionally failing via `failOnMaxReached`).
 
-        You can access the outputs of the nested tasks in the `condition` property. The `condition` is evaluated after all nested task runs finish.
-        """
+        Iteration count and outputs are available under `outputs.loop.*` for conditions or downstream use."""
 )
 @Plugin(
     examples = {
@@ -69,43 +65,24 @@ import java.util.stream.Stream;
     },
     aliases = "io.kestra.plugin.core.flow.WaitFor"
 )
-public class LoopUntil extends Task implements FlowableTask<LoopUntil.Output> {
+public class LoopUntil extends AbstractBranch<LoopUntil.Output> {
     private static final int INITIAL_LOOP_VALUE = 1;
 
-    @Valid
-    protected List<Task> errors;
-
-    @Valid
-    @JsonProperty("finally")
-    @Getter(AccessLevel.NONE)
-    protected List<Task> _finally;
-
-    public List<Task> getFinally() {
-        return this._finally;
-    }
-
-    @Valid
-    @PluginProperty
     @NotNull
-    private List<Task> tasks;
-
-    @NotNull
-    @PluginProperty(dynamic = true)
     @Schema(
-        title = "The condition expression that should evaluate to `true` or `false`.",
+        title = "The condition expression that should evaluate to `true` or `false`",
         description = "Boolean coercion allows 0, -0, null and '' to evaluate to false; all other values will evaluate to true."
     )
-    private String condition;
+    private Property<String> condition;
 
     @Schema(
         title = "If set to `true`, the task run will end in a failed state once the `maxIterations` or `maxDuration` are reached."
     )
     @Builder.Default
-    @PluginProperty
-    private Boolean failOnMaxReached = false;
+    private Property<Boolean> failOnMaxReached = Property.ofValue(false);
 
     @Schema(
-        title = "Check the frequency configuration."
+        title = "Check the frequency configuration"
     )
     @Builder.Default
     @PluginProperty
@@ -117,7 +94,7 @@ public class LoopUntil extends Task implements FlowableTask<LoopUntil.Output> {
 
         GraphUtils.sequential(
             subGraph,
-            tasks,
+            this.getTasks(),
             this.errors,
             this._finally,
             taskRun,
@@ -128,26 +105,7 @@ public class LoopUntil extends Task implements FlowableTask<LoopUntil.Output> {
     }
 
     @Override
-    public List<Task> allChildTasks() {
-        return Stream
-            .concat(
-                tasks.stream(),
-                Stream.concat(
-                    this.getErrors() != null ? this.getErrors().stream() : Stream.empty(),
-                    this.getFinally() != null ? this.getFinally().stream() : Stream.empty()
-                )
-            )
-            .toList();
-    }
-
-    @Override
-    public List<ResolvedTask> childTasks(RunContext runContext, TaskRun parentTaskRun) throws IllegalVariableEvaluationException {
-        return FlowableUtils.resolveTasks(tasks, parentTaskRun);
-    }
-
-    @Override
     public List<NextTaskRun> resolveNexts(RunContext runContext, Execution execution, TaskRun parentTaskRun) throws IllegalVariableEvaluationException {
-
         return FlowableUtils.resolveWaitForNext(
             execution,
             this.childTasks(runContext, parentTaskRun),
@@ -159,34 +117,49 @@ public class LoopUntil extends Task implements FlowableTask<LoopUntil.Output> {
 
     public Instant nextExecutionDate(RunContext runContext, Execution execution, TaskRun parentTaskRun) throws IllegalVariableEvaluationException {
         if (!this.reachedMaximums(runContext, execution, parentTaskRun, false)) {
-            String continueLoop = runContext.render(this.condition);
+            String continueLoop = runContext.render(this.condition).skipCache().as(String.class).orElse(null);
             if (!TruthUtils.isTruthy(continueLoop)) {
-                return Instant.now().plus(this.checkFrequency.interval);
+                return Instant.now().plus(runContext.render(this.getCheckFrequency().getInterval()).as(Duration.class).orElseThrow());
             }
         }
 
         return null;
     }
 
-    private boolean reachedMaximums(RunContext runContext, Execution execution, TaskRun parentTaskRun, Boolean printLog) {
+    private boolean reachedMaximums(RunContext runContext, Execution execution, TaskRun parentTaskRun, Boolean printLog) throws IllegalVariableEvaluationException {
         Logger logger = runContext.logger();
 
         if (!this.childTaskRunExecuted(execution, parentTaskRun)) {
             return false;
         }
 
-        Integer iterationCount = Optional.ofNullable(parentTaskRun.getOutputs())
-            .map(outputs -> (Integer) outputs.get("iterationCount"))
+        Integer iterationCount = Optional.ofNullable(runContext.currentOutput())
+            .map(out -> (Integer) out.get("iterationCount"))
             .orElse(0);
-        if (this.checkFrequency.maxIterations != null && iterationCount != null && iterationCount > this.checkFrequency.maxIterations) {
-            if (printLog) {logger.warn("Max iterations reached");}
+
+        Optional<Integer> maxIterations = runContext.render(this.getCheckFrequency().getMaxIterations()).as(Integer.class);
+        if (maxIterations.isPresent() && iterationCount > maxIterations.get()) {
+            if (printLog) {
+                logger.warn("Max iterations reached");
+            }
             return true;
         }
-
-        Instant creationDate = parentTaskRun.getState().getHistories().getFirst().getDate();
-        if (this.checkFrequency.maxDuration != null &&
-            creationDate != null && creationDate.plus(this.checkFrequency.maxDuration).isBefore(Instant.now())) {
-            if (printLog) {logger.warn("Max duration reached");}
+        Instant creationDate = parentTaskRun.getState()
+            .getHistories()
+            .reversed()
+            .stream()
+            .filter(history -> history.getState().isCreated())
+            .findFirst().get()
+            .getDate();
+        Optional<Duration> maxDuration = runContext.render(this.getCheckFrequency().getMaxDuration()).as(Duration.class);
+        if (
+            maxDuration.isPresent()
+                && creationDate != null
+                && creationDate.plus(maxDuration.get()).isBefore(Instant.now())
+        ) {
+            if (printLog) {
+                logger.warn("Max duration reached");
+            }
 
             return true;
         }
@@ -201,7 +174,11 @@ public class LoopUntil extends Task implements FlowableTask<LoopUntil.Output> {
             return Optional.empty();
         }
 
-        if (childTaskExecuted && this.reachedMaximums(runContext, execution, parentTaskRun, true) && this.failOnMaxReached) {
+        if (
+            childTaskExecuted
+                && this.reachedMaximums(runContext, execution, parentTaskRun, true)
+                && Boolean.TRUE.equals(runContext.render(this.failOnMaxReached).as(Boolean.class).orElseThrow())
+        ) {
             return Optional.of(State.Type.FAILED);
         }
 
@@ -224,30 +201,31 @@ public class LoopUntil extends Task implements FlowableTask<LoopUntil.Output> {
         return execution
             .getTaskRunList()
             .stream()
-            .filter(t -> t.getParentTaskRunId() != null
-                && t.getParentTaskRunId().equals(parentTaskRun.getId())
-                && t.getState().isTerminatedNoFail()
+            .filter(
+                t -> t.getParentTaskRunId() != null
+                    && t.getParentTaskRunId().equals(parentTaskRun.getId())
+                    && t.getState().isTerminatedNoFail()
             ).count() == tasks.size();
 
     }
 
-    @SuppressWarnings("unchecked")
     @Override
     public LoopUntil.Output outputs(RunContext runContext) throws IllegalVariableEvaluationException {
-       Map<String, Object> outputs = (Map<String, Object>) runContext.getVariables().get("outputs");
-        if (outputs != null && outputs.get(this.id) != null) {
-            return Output.builder().iterationCount((Integer) ((Map<String, Object>) outputs.get(this.id)).get("iterationCount")).build();
+        Map<String, Object> outputs = runContext.currentOutput();
+        if (!MapUtils.isEmpty(outputs)) {
+            return Output.builder().iterationCount((Integer) outputs.get("iterationCount")).build();
         }
-        return LoopUntil.Output.builder()
+        return Output.builder()
             .iterationCount(INITIAL_LOOP_VALUE)
             .build();
     }
 
-    public LoopUntil.Output outputs(TaskRun parentTaskRun) throws IllegalVariableEvaluationException {
-        String value = parentTaskRun != null ?
-            String.valueOf(Optional.ofNullable(parentTaskRun.getOutputs())
+    public LoopUntil.Output outputs(Map<String, Object> previousOutput) throws IllegalVariableEvaluationException {
+        String value = String.valueOf(
+            Optional.ofNullable(previousOutput)
                 .map(outputs -> outputs.get("iterationCount"))
-                .orElse("0")) : "0";
+                .orElse("0")
+        );
 
         return Output.builder()
             .iterationCount(Integer.parseInt(value) + 1)
@@ -261,29 +239,26 @@ public class LoopUntil extends Task implements FlowableTask<LoopUntil.Output> {
     }
 
     @SuperBuilder(toBuilder = true)
-    @Introspected
     @Getter
     @NoArgsConstructor
     public static class CheckFrequency {
         @Schema(
-            title = "Maximum count of iterations."
+            title = "Maximum count of iterations",
+            description = "If not set, defines an unlimited number of iterations."
         )
-        @Builder.Default
-        @PluginProperty
-        private Integer maxIterations = 100;
+        private Property<Integer> maxIterations;
 
         @Schema(
-            title = "Maximum duration of the task."
+            title = "Maximum duration of the task",
+            description = "If not set, defines an unlimited maximum duration of iterations."
         )
-        @Builder.Default
-        @PluginProperty
-        private Duration maxDuration = Duration.ofHours(1);
+        private Property<Duration> maxDuration;
 
         @Schema(
-            title = "Interval between each iteration."
+            title = "Interval between each iteration"
         )
+        @NotNull
         @Builder.Default
-        @PluginProperty
-        private Duration interval = Duration.ofSeconds(1);
+        private Property<Duration> interval = Property.ofValue(Duration.ofMinutes(1));
     }
 }

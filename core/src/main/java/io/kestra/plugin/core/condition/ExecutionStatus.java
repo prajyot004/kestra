@@ -1,29 +1,37 @@
 package io.kestra.plugin.core.condition;
 
+import java.util.List;
+
 import io.kestra.core.exceptions.IllegalConditionEvaluation;
 import io.kestra.core.exceptions.InternalException;
-import io.kestra.core.models.annotations.PluginProperty;
-import io.swagger.v3.oas.annotations.media.Schema;
-import lombok.EqualsAndHashCode;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.ToString;
-import lombok.experimental.SuperBuilder;
 import io.kestra.core.models.annotations.Example;
 import io.kestra.core.models.annotations.Plugin;
 import io.kestra.core.models.conditions.Condition;
 import io.kestra.core.models.conditions.ConditionContext;
 import io.kestra.core.models.flows.State;
+import io.kestra.core.models.property.Property;
+import io.kestra.core.runners.RunContext;
 
-import java.util.List;
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.ToString;
+import lombok.experimental.SuperBuilder;
 
 @SuperBuilder
 @ToString
 @EqualsAndHashCode
 @Getter
 @NoArgsConstructor
-@Schema(title = "Condition based on execution status.")
+@Schema(
+    title = "Match executions by status.",
+    description = """
+        Passes when the triggering execution’s current state is included in `in` and not present in `notIn`.
+
+        If a list is empty it is ignored, so provide at least one of them to avoid unintentionally matching everything."""
+)
 @Plugin(
     examples = {
         @Example(
@@ -37,7 +45,7 @@ import jakarta.validation.Valid;
                   - id: hello
                     type: io.kestra.plugin.core.log.Log
                     message: "This flow will execute when any flow enters FAILED or KILLED state."
-                
+
                 triggers:
                   - id: flow_trigger
                     type: io.kestra.plugin.core.trigger.Flow
@@ -46,21 +54,19 @@ import jakarta.validation.Valid;
                         in:
                           - FAILED
                           - KILLED
-            """
+                """
         )
     },
-    aliases = {"io.kestra.core.models.conditions.types.ExecutionStatusCondition", "io.kestra.plugin.core.condition.ExecutionStatusCondition"}
+    aliases = { "io.kestra.core.models.conditions.types.ExecutionStatusCondition", "io.kestra.plugin.core.condition.ExecutionStatusCondition" }
 )
 public class ExecutionStatus extends Condition {
     @Valid
     @Schema(title = "List of states that are authorized.")
-    @PluginProperty
-    private List<State.Type> in;
+    private Property<List<State.Type>> in;
 
     @Valid
     @Schema(title = "List of states that aren't authorized.")
-    @PluginProperty
-    private List<State.Type> notIn;
+    private Property<List<State.Type>> notIn;
 
     @Override
     public boolean test(ConditionContext conditionContext) throws InternalException {
@@ -70,11 +76,14 @@ public class ExecutionStatus extends Condition {
 
         boolean result = true;
 
-        if (this.in != null && !this.in.contains(conditionContext.getExecution().getState().getCurrent())) {
+        RunContext runContext = conditionContext.getRunContext();
+        var stateInRendered = runContext.render(this.in).asList(State.Type.class, conditionContext.getVariables());
+        if (!stateInRendered.isEmpty() && !stateInRendered.contains(conditionContext.getExecution().getState().getCurrent())) {
             result = false;
         }
 
-        if (this.notIn != null && this.notIn.contains(conditionContext.getExecution().getState().getCurrent())) {
+        var stateNotInRendered = runContext.render(this.notIn).asList(State.Type.class, conditionContext.getVariables());
+        if (!stateNotInRendered.isEmpty() && stateNotInRendered.contains(conditionContext.getExecution().getState().getCurrent())) {
             result = false;
         }
 

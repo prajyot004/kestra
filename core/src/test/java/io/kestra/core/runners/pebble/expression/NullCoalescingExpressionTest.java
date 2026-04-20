@@ -1,17 +1,19 @@
 package io.kestra.core.runners.pebble.expression;
 
-import com.google.common.collect.ImmutableMap;
-import io.kestra.core.exceptions.IllegalVariableEvaluationException;
-import io.kestra.core.junit.annotations.KestraTest;
-import io.kestra.core.runners.VariableRenderer;
-import jakarta.inject.Inject;
-import org.junit.jupiter.api.Test;
-
 import java.util.HashMap;
 import java.util.Map;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import org.junit.jupiter.api.Test;
+
+import com.google.common.collect.ImmutableMap;
+
+import io.kestra.core.exceptions.IllegalVariableEvaluationException;
+import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.runners.VariableRenderer;
+
+import jakarta.inject.Inject;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @KestraTest
@@ -28,13 +30,14 @@ class NullCoalescingExpressionTest {
 
         String render = variableRenderer.render("{{ inner.bla ?? block.test.child }}", vars);
 
-        assertThat(render, is("awesome"));
+        assertThat(render).isEqualTo("awesome");
 
         render = variableRenderer.render("{{ block.test.child ?? inner.bla }}", vars);
 
-        assertThat(render, is("awesome"));
+        assertThat(render).isEqualTo("awesome");
 
-        assertThrows(IllegalVariableEvaluationException.class, () -> {
+        assertThrows(IllegalVariableEvaluationException.class, () ->
+        {
             variableRenderer.render("{{ missing ?? missing2 }}", vars);
         });
     }
@@ -47,25 +50,25 @@ class NullCoalescingExpressionTest {
         );
 
         String render = variableRenderer.render("{{ block.test.child ?? null }}", vars);
-        assertThat(render, is("awesome"));
+        assertThat(render).isEqualTo("awesome");
 
         render = variableRenderer.render("{{ block[inner].child ?? null }}", vars);
-        assertThat(render, is("awesome"));
+        assertThat(render).isEqualTo("awesome");
 
         render = variableRenderer.render("{{ block[missing].child ?? block[inner].child }}", vars);
-        assertThat(render, is("awesome"));
+        assertThat(render).isEqualTo("awesome");
 
         render = variableRenderer.render("{{ block[missing].child ?? block[missing2].child ?? block[inner].child }}", vars);
-        assertThat(render, is("awesome"));
+        assertThat(render).isEqualTo("awesome");
 
         render = variableRenderer.render("{{ missing ?? block.test.child }}", vars);
-        assertThat(render, is("awesome"));
+        assertThat(render).isEqualTo("awesome");
 
-        assertThrows(IllegalVariableEvaluationException.class, () -> {
+        assertThrows(IllegalVariableEvaluationException.class, () ->
+        {
             variableRenderer.render("{{ missing ?? missing2 }}", vars);
         });
     }
-
 
     @Test
     void emptyObject() throws IllegalVariableEvaluationException {
@@ -75,7 +78,7 @@ class NullCoalescingExpressionTest {
 
         String render = variableRenderer.render("{{ block ?? 'UNDEFINED' }}", vars);
 
-        assertThat(render, is("{}"));
+        assertThat(render).isEqualTo("{}");
     }
 
     @Test
@@ -85,10 +88,10 @@ class NullCoalescingExpressionTest {
 
         String render = variableRenderer.render("{{ null ?? 'IS NULL' }}", vars);
 
-        assertThat(render, is("IS NULL"));
+        assertThat(render).isEqualTo("IS NULL");
 
         render = variableRenderer.render("{{ undefined ?? 'IS UNDEFINED' }}", vars);
 
-        assertThat(render, is("IS UNDEFINED"));
+        assertThat(render).isEqualTo("IS UNDEFINED");
     }
 }

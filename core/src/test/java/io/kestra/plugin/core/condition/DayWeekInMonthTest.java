@@ -1,22 +1,25 @@
 package io.kestra.plugin.core.condition;
 
-import com.google.common.collect.ImmutableMap;
-import io.kestra.core.models.executions.Execution;
-import io.kestra.core.models.flows.Flow;
-import io.kestra.core.services.ConditionService;
-import io.kestra.core.utils.TestsUtils;
-import io.kestra.core.junit.annotations.KestraTest;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.util.stream.Stream;
+
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
-import java.time.DayOfWeek;
-import java.time.LocalDate;
-import java.util.stream.Stream;
+import com.google.common.collect.ImmutableMap;
+
+import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.models.executions.Execution;
+import io.kestra.core.models.flows.Flow;
+import io.kestra.core.models.property.Property;
+import io.kestra.core.services.ConditionService;
+import io.kestra.core.utils.TestsUtils;
+
 import jakarta.inject.Inject;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import static org.assertj.core.api.Assertions.assertThat;
 
 @KestraTest
 class DayWeekInMonthTest {
@@ -43,13 +46,13 @@ class DayWeekInMonthTest {
         Execution execution = TestsUtils.mockExecution(flow, ImmutableMap.of());
 
         DayWeekInMonth build = DayWeekInMonth.builder()
-            .date(date)
-            .dayOfWeek(dayOfWeek)
-            .dayInMonth(dayInMonth)
+            .date(Property.ofValue(date))
+            .dayOfWeek(Property.ofValue(dayOfWeek))
+            .dayInMonth(Property.ofValue(dayInMonth))
             .build();
 
         boolean test = conditionService.isValid(build, flow, execution);
 
-        assertThat(test, is(result));
+        assertThat(test).isEqualTo(result);
     }
 }

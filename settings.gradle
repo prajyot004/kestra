@@ -1,4 +1,10 @@
-rootProject.name="kestra"
+plugins {
+    id("io.kestra.gradle.develocity-conventions") version "1.1.0"
+    id("com.gradle.common-custom-user-data-gradle-plugin") version "2.5.0"
+}
+
+rootProject.name = "kestra"
+
 
 include 'platform'
 
@@ -7,20 +13,28 @@ include 'core'
 include 'tests'
 
 include 'runner-memory'
+include 'repository-memory'
 
 include 'storage-local'
-
-include 'repository-memory'
 
 include 'jdbc'
 include 'jdbc-h2'
 include 'jdbc-mysql'
 include 'jdbc-postgres'
 
+include 'queue'
+include 'queue-jdbc'
+
 include 'webserver'
+include 'executor'
+include 'scheduler'
+include 'worker'
+include 'worker-controller'
+include 'indexer'
+
 include 'ui'
 include 'model'
 include 'processor'
 include 'script'
-include 'e2e-tests'
 
+include 'jmh-benchmarks'

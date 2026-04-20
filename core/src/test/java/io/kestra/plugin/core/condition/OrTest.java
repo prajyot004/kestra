@@ -1,25 +1,28 @@
 package io.kestra.plugin.core.condition;
 
-import com.google.common.collect.ImmutableMap;
-import io.kestra.core.models.conditions.Condition;
-import io.kestra.core.models.executions.Execution;
-import io.kestra.core.models.flows.Flow;
-import io.kestra.core.services.ConditionService;
-import io.kestra.core.utils.TestsUtils;
-import io.kestra.core.junit.annotations.KestraTest;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.MethodSource;
-
 import java.time.DayOfWeek;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Stream;
+
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+import com.google.common.collect.ImmutableMap;
+
+import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.models.conditions.Condition;
+import io.kestra.core.models.executions.Execution;
+import io.kestra.core.models.flows.Flow;
+import io.kestra.core.models.property.Property;
+import io.kestra.core.services.ConditionService;
+import io.kestra.core.utils.TestsUtils;
+
 import jakarta.inject.Inject;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import static org.assertj.core.api.Assertions.assertThat;
 
 @KestraTest
 class OrTest {
@@ -31,8 +34,8 @@ class OrTest {
             Arguments.of(
                 Collections.singletonList(
                     DayWeek.builder()
-                        .date("2013-09-08")
-                        .dayOfWeek(DayOfWeek.SUNDAY)
+                        .date(Property.ofValue("2013-09-08"))
+                        .dayOfWeek(Property.ofValue(DayOfWeek.SUNDAY))
                         .build()
                 ),
                 true
@@ -40,12 +43,12 @@ class OrTest {
             Arguments.of(
                 Arrays.asList(
                     DayWeek.builder()
-                        .date("2013-09-08")
-                        .dayOfWeek(DayOfWeek.SATURDAY)
+                        .date(Property.ofValue("2013-09-08"))
+                        .dayOfWeek(Property.ofValue(DayOfWeek.SATURDAY))
                         .build(),
                     DayWeek.builder()
-                        .date("2013-09-08")
-                        .dayOfWeek(DayOfWeek.MONDAY)
+                        .date(Property.ofValue("2013-09-08"))
+                        .dayOfWeek(Property.ofValue(DayOfWeek.MONDAY))
                         .build()
                 ),
                 false
@@ -53,12 +56,12 @@ class OrTest {
             Arguments.of(
                 Arrays.asList(
                     DayWeek.builder()
-                        .date("2013-09-08")
-                        .dayOfWeek(DayOfWeek.SUNDAY)
+                        .date(Property.ofValue("2013-09-08"))
+                        .dayOfWeek(Property.ofValue(DayOfWeek.SUNDAY))
                         .build(),
                     DayWeek.builder()
-                        .date("2013-09-08")
-                        .dayOfWeek(DayOfWeek.MONDAY)
+                        .date(Property.ofValue("2013-09-08"))
+                        .dayOfWeek(Property.ofValue(DayOfWeek.MONDAY))
                         .build()
                 ),
                 true
@@ -78,6 +81,6 @@ class OrTest {
 
         boolean test = conditionService.isValid(build, flow, execution);
 
-        assertThat(test, is(result));
+        assertThat(test).isEqualTo(result);
     }
 }

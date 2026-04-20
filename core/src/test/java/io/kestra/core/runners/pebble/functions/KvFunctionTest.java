@@ -1,75 +1,165 @@
 package io.kestra.core.runners.pebble.functions;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import java.io.IOException;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Map;
 
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.junit.annotations.KestraTest;
-import io.kestra.core.junit.annotations.LoadFlows;
-import io.kestra.core.models.executions.Execution;
-import io.kestra.core.models.executions.LogEntry;
-import io.kestra.core.models.executions.TaskRun;
-import io.kestra.core.models.flows.State;
-import io.kestra.core.queues.QueueException;
-import io.kestra.core.queues.QueueInterface;
-import io.kestra.core.runners.RunnerUtils;
-import io.kestra.core.storages.StorageContext;
+import io.kestra.core.runners.KVMetadataStateStore;
+import io.kestra.core.runners.VariableRenderer;
 import io.kestra.core.storages.StorageInterface;
 import io.kestra.core.storages.kv.InternalKVStore;
+import io.kestra.core.storages.kv.KVMetadata;
 import io.kestra.core.storages.kv.KVStore;
 import io.kestra.core.storages.kv.KVValueAndMetadata;
 import io.kestra.core.utils.TestsUtils;
+
 import jakarta.inject.Inject;
-import java.io.IOException;
-import java.net.URI;
-import java.util.Map;
-import java.util.concurrent.TimeoutException;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import reactor.core.publisher.Flux;
+
+import static io.kestra.core.runners.pebble.functions.FunctionTestUtils.getVariables;
+import static org.assertj.core.api.Assertions.assertThat;
 
 @KestraTest(startRunner = true)
 public class KvFunctionTest {
     @Inject
-    private RunnerUtils runnerUtils;
+    private KVMetadataStateStore kvMetadataStateStore;
 
     @Inject
     private StorageInterface storageInterface;
 
     @Inject
-    private QueueInterface<LogEntry> logQueue;
-
-    @BeforeEach
-    void reset() throws IOException {
-        storageInterface.deleteByPrefix(null, null, URI.create(StorageContext.kvPrefix("io.kestra.tests")));
-    }
+    VariableRenderer variableRenderer;
 
     @Test
-    @LoadFlows({"flows/valids/kv.yaml"})
-    void get() throws TimeoutException, IOException, QueueException {
-        KVStore kv = new InternalKVStore(null, "io.kestra.tests", storageInterface);
+    void shouldGetValueFromKVGivenExistingKey() throws IllegalVariableEvaluationException, IOException {
+        // Given
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        KVStore kv = new InternalKVStore(tenant, "io.kestra.tests", storageInterface, kvMetadataStateStore);
         kv.put("my-key", new KVValueAndMetadata(null, Map.of("field", "value")));
 
-        Execution execution = runnerUtils.runOne(null, "io.kestra.tests", "kv");
-        assertThat(execution.getTaskRunList().getFirst().getOutputs().get("value"), is("value"));
-        assertThat(execution.getTaskRunList().get(1).getOutputs().get("value"), is("value"));
+        Map<String, Object> variables = getVariables(tenant, "io.kestra.tests");
+
+        // When
+        String rendered = variableRenderer.render("{{ kv('my-key') }}", variables);
+
+        // Then
+        assertThat(rendered).isEqualTo("{\"field\":\"value\"}");
     }
 
     @Test
-    @LoadFlows({"flows/valids/kv.yaml"})
-    void getKeyNotFound() throws TimeoutException, QueueException {
-        Flux<LogEntry> receive = TestsUtils.receive(logQueue);
+    void shouldGetValueFromKVGivenExistingKeyWithInheritance() throws IllegalVariableEvaluationException, IOException {
+        // Given
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        KVStore kv = new InternalKVStore(tenant, "my.company", storageInterface, kvMetadataStateStore);
+        kv.put("my-key", new KVValueAndMetadata(null, Map.of("field", "value")));
 
-        Execution execution = runnerUtils.runOne(null, "io.kestra.tests", "kv", null, (flow, exec) -> Map.of("errorOnMissing", true));
-        assertThat(execution.getTaskRunList().getFirst().getOutputs().get("value"), is(""));
-        assertThat(execution.getTaskRunList().getFirst().getState().getCurrent(), is(State.Type.SUCCESS));
-        TaskRun taskRun = execution.getTaskRunList().get(1);
-        assertThat(taskRun.getState().getCurrent(), is(State.Type.FAILED));
+        KVStore firstKv = new InternalKVStore(tenant, "my", storageInterface, kvMetadataStateStore);
+        firstKv.put("my-key", new KVValueAndMetadata(null, Map.of("field", "firstValue")));
 
-        assertThat(
-            receive.toStream()
-                .filter(logEntry -> logEntry.getTaskRunId() != null && logEntry.getTaskRunId().equals(taskRun.getId()))
-                .anyMatch(log -> log.getMessage().contains("io.pebbletemplates.pebble.error.PebbleException: The key 'my-key' does not exist in the namespace 'io.kestra.tests'. ({{ kv('my-key', inputs.namespace, inputs.errorOnMissing).field }}:1")),
-            is(true)
-        );
+        Map<String, Object> variables = getVariables(tenant, "my.company.team");
+
+        // When
+        String rendered = variableRenderer.render("{{ kv('my-key') }}", variables);
+
+        // Then
+        assertThat(rendered).isEqualTo("{\"field\":\"value\"}");
     }
+
+    @Test
+    void shouldNotGetValueFromKVWithGivenNamespaceAndInheritance() throws IOException {
+        // Given
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        KVStore kv = new InternalKVStore(tenant, "kv", storageInterface, kvMetadataStateStore);
+        kv.put("my-key", new KVValueAndMetadata(null, Map.of("field", "value")));
+
+        Map<String, Object> variables = getVariables(tenant, "my.company.team");
+
+        // When
+        Assertions.assertThrows(IllegalVariableEvaluationException.class, () -> variableRenderer.render("{{ kv('my-key', namespace='kv.inherited') }}", variables));
+    }
+
+    @Test
+    void shouldGetValueFromKVGivenExistingAndNamespace() throws IllegalVariableEvaluationException, IOException {
+        // Given
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        KVStore kv = new InternalKVStore(tenant, "kv", storageInterface, kvMetadataStateStore);
+        kv.put("my-key", new KVValueAndMetadata(null, Map.of("field", "value")));
+
+        Map<String, Object> variables = getVariables(tenant, "io.kestra.tests");
+
+        // When
+        String rendered = variableRenderer.render("{{ kv('my-key', namespace='kv') }}", variables);
+
+        // Then
+        assertThat(rendered).isEqualTo("{\"field\":\"value\"}");
+    }
+
+    @Test
+    void shouldGetEmptyGivenNonExistingKeyAndErrorOnMissingFalse() throws IllegalVariableEvaluationException {
+        // Given
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        Map<String, Object> variables = getVariables(tenant, "io.kestra.tests");
+
+        // When
+        String rendered = variableRenderer.render("{{ kv('my-key', errorOnMissing=false) }}", variables);
+
+        // Then
+        assertThat(rendered).isEqualTo("");
+    }
+
+    @Test
+    void shouldThrowOrGetEmptyIfExpiredDependingOnErrorOnMissing() throws IOException, IllegalVariableEvaluationException {
+        String tenant = TestsUtils.randomTenant();
+        String namespace = TestsUtils.randomNamespace();
+        Map<String, Object> variables = getVariables(tenant, namespace);
+
+        KVStore kv = new InternalKVStore(tenant, namespace, storageInterface, kvMetadataStateStore);
+        kv.put("my-expired-key", new KVValueAndMetadata(new KVMetadata(null, Instant.now().minus(1, ChronoUnit.HOURS)), "anyValue"));
+
+        String rendered = variableRenderer.render("{{ kv('my-expired-key', errorOnMissing=false) }}", variables);
+        assertThat(rendered).isEqualTo("");
+
+        kv.put("another-expired-key", new KVValueAndMetadata(new KVMetadata(null, Instant.now().minus(1, ChronoUnit.HOURS)), "anyValue"));
+
+        IllegalVariableEvaluationException exception = Assertions
+            .assertThrows(IllegalVariableEvaluationException.class, () -> variableRenderer.render("{{ kv('another-expired-key') }}", variables));
+
+        assertThat(exception.getMessage()).isEqualTo("io.pebbletemplates.pebble.error.PebbleException: The requested value has expired ({{ kv('another-expired-key') }}:1)");
+    }
+
+    @Test
+    void shouldFailGivenNonExistingKeyAndErrorOnMissingTrue() {
+        // Given
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        Map<String, Object> variables = getVariables(tenant, "io.kestra.tests");
+
+        // When
+        IllegalVariableEvaluationException exception = Assertions.assertThrows(IllegalVariableEvaluationException.class, () ->
+        {
+            variableRenderer.render("{{ kv('my-key', errorOnMissing=true) }}", variables);
+        });
+
+        // Then
+        assertThat(exception.getMessage())
+            .isEqualTo("io.pebbletemplates.pebble.error.PebbleException: The key 'my-key' does not exist in the namespace 'io.kestra.tests'. ({{ kv('my-key', errorOnMissing=true) }}:1)");
+    }
+
+    @Test
+    void shouldFailGivenNonExistingKeyUsingDefaults() {
+        // Given
+        String tenant = TestsUtils.randomTenant(this.getClass().getSimpleName());
+        Map<String, Object> variables = getVariables(tenant, "io.kestra.tests");
+        // When
+        IllegalVariableEvaluationException exception = Assertions.assertThrows(IllegalVariableEvaluationException.class, () -> variableRenderer.render("{{ kv('my-key') }}", variables));
+
+        // Then
+        assertThat(exception.getMessage())
+            .isEqualTo("io.pebbletemplates.pebble.error.PebbleException: The key 'my-key' does not exist in the namespace 'io.kestra.tests'. ({{ kv('my-key') }}:1)");
+    }
+
 }

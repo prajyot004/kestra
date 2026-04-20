@@ -1,6 +1,6 @@
 <template>
-    <span data-component="FILENAME_PLACEHOLDER">
-        <el-tooltip v-if="histories" popper-class="duration-tt" :persistent="false" transition="" :hide-after="0" effect="light">
+    <span>
+        <el-tooltip v-if="histories" popperClass="duration-tt" :persistent="false" transition="" :hideAfter="0" effect="light">
             <template #content>
                 <span v-for="(history, index) in histories" :key="'tt-' + index">
                     <span class="square" :style="squareClass(history.state)" />
@@ -81,7 +81,12 @@
                 this.duration = Utils.humanDuration(this.delta() / 1000)
             },
             squareClass(state) {
-                const statusVarname = state.toLowerCase();
+                let statusVarname = state.toLowerCase();
+
+                // Minor hack to reuse created color for submitted status.
+                // See https://github.com/kestra-io/kestra/issues/14876 for more details.
+                if(statusVarname === "submitted") statusVarname = "created";
+
                 return {
                     backgroundColor: `var(--ks-chart-${statusVarname})`
                 };

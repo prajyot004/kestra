@@ -1,32 +1,29 @@
 package io.kestra.jdbc.repository;
 
-import io.kestra.core.events.CrudEvent;
-import io.kestra.core.events.CrudEventType;
-import io.kestra.core.models.Setting;
-import io.kestra.core.repositories.SettingRepositoryInterface;
-import io.micronaut.context.ApplicationContext;
-import io.micronaut.context.event.ApplicationEventPublisher;
-import lombok.SneakyThrows;
-import org.jooq.Field;
-import org.jooq.Record1;
-import org.jooq.Select;
-import org.jooq.SelectJoinStep;
-import org.jooq.impl.DSL;
-
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-public abstract class AbstractJdbcSettingRepository extends AbstractJdbcRepository implements SettingRepositoryInterface {
-    protected final io.kestra.jdbc.AbstractJdbcRepository<Setting> jdbcRepository;
+import org.jooq.*;
+import org.jooq.impl.DSL;
+
+import io.kestra.core.events.CrudEvent;
+import io.kestra.core.events.CrudEventType;
+import io.kestra.core.models.Setting;
+import io.kestra.core.repositories.SettingRepositoryInterface;
+
+import io.micronaut.context.ApplicationContext;
+import io.micronaut.context.event.ApplicationEventPublisher;
+import lombok.SneakyThrows;
+
+public abstract class AbstractJdbcSettingRepository extends AbstractJdbcCrudRepository<Setting> implements SettingRepositoryInterface {
     private final ApplicationEventPublisher<CrudEvent<Setting>> eventPublisher;
 
     @SuppressWarnings("unchecked")
     public AbstractJdbcSettingRepository(
         io.kestra.jdbc.AbstractJdbcRepository<Setting> jdbcRepository,
-        ApplicationContext applicationContext
-    ) {
-        this.jdbcRepository = jdbcRepository;
+        ApplicationContext applicationContext) {
+        super(jdbcRepository);
         this.eventPublisher = applicationContext.getBean(ApplicationEventPublisher.class);
     }
 
@@ -36,39 +33,25 @@ public abstract class AbstractJdbcSettingRepository extends AbstractJdbcReposito
 
     @Override
     public Optional<Setting> findByKey(String key) {
-        return jdbcRepository
-            .getDslContextWrapper()
-            .transactionResult(configuration -> {
-                Select<Record1<Object>> from = DSL
-                    .using(configuration)
-                    .select(field("value"))
-                    .from(this.jdbcRepository.getTable())
-                    .where(field("key").eq(key));
-
-                return this.jdbcRepository.fetchOne(from);
-            });
+        return findOne(DSL.noCondition(), KEY_FIELD.eq(key));
     }
 
     @Override
     public List<Setting> findAll() {
-        return this.jdbcRepository
-            .getDslContextWrapper()
-            .transactionResult(configuration -> {
-                SelectJoinStep<Record1<Object>> select = DSL
-                    .using(configuration)
-                    .select(field("value"))
-                    .from(this.jdbcRepository.getTable());
-
-                return this.jdbcRepository.fetch(select);
-            });
+        return findAll(DSL.noCondition());
     }
 
     @Override
     public Setting save(Setting setting) {
+        this.eventPublisher.publishEvent(new CrudEvent<>(setting, CrudEventType.UPDATE));
+
+        return internalSave(setting);
+    }
+
+    @Override
+    public Setting internalSave(Setting setting) {
         Map<Field<Object>, Object> fields = this.jdbcRepository.persistFields(setting);
         this.jdbcRepository.persist(setting, fields);
-
-        eventPublisher.publishEvent(new CrudEvent<>(setting, CrudEventType.UPDATE));
 
         return setting;
     }
@@ -82,9 +65,18 @@ public abstract class AbstractJdbcSettingRepository extends AbstractJdbcReposito
         }
 
         this.jdbcRepository.delete(setting);
-
-        eventPublisher.publishEvent(new CrudEvent<>(setting, CrudEventType.DELETE));
+        this.eventPublisher.publishEvent(CrudEvent.delete(setting));
 
         return setting;
+    }
+
+    @Override
+    protected Condition defaultFilter(String tenantId) {
+        return buildTenantCondition(tenantId);
+    }
+
+    @Override
+    protected Condition defaultFilter() {
+        return DSL.noCondition();
     }
 }

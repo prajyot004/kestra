@@ -1,5 +1,13 @@
 package io.kestra.core.utils;
 
+import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+import org.apache.commons.lang3.tuple.Pair;
+import org.apache.commons.lang3.tuple.Triple;
+
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.executions.TaskRun;
@@ -9,26 +17,19 @@ import io.kestra.core.models.tasks.ExecutableTask;
 import io.kestra.core.models.tasks.FlowableTask;
 import io.kestra.core.models.tasks.Task;
 import io.kestra.core.models.triggers.AbstractTrigger;
-import io.kestra.core.models.triggers.Trigger;
+import io.kestra.core.scheduler.model.TriggerState;
 import io.kestra.plugin.core.flow.Dag;
-import org.apache.commons.lang3.tuple.Pair;
-import org.apache.commons.lang3.tuple.Triple;
-
-import java.util.*;
-import java.util.function.Function;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 public class GraphUtils {
     public static FlowGraph flowGraph(Flow flow, Execution execution) throws IllegalVariableEvaluationException {
         return GraphUtils.flowGraph(flow, execution, null);
     }
 
-    public static FlowGraph flowGraph(Flow flow, Execution execution, List<Trigger> triggers) throws IllegalVariableEvaluationException {
+    public static FlowGraph flowGraph(Flow flow, Execution execution, List<TriggerState> triggers) throws IllegalVariableEvaluationException {
         return FlowGraph.of(GraphUtils.of(flow, execution, triggers));
     }
 
-    public static GraphCluster of(GraphCluster graph, Flow flow, Execution execution, List<Trigger> triggers) throws IllegalVariableEvaluationException {
+    public static GraphCluster of(GraphCluster graph, Flow flow, Execution execution, List<TriggerState> triggers) throws IllegalVariableEvaluationException {
         if (graph == null) {
             graph = new GraphCluster();
         }
@@ -43,6 +44,7 @@ public class GraphUtils {
             flow.getTasks(),
             flow.getErrors(),
             flow.getFinally(),
+            flow.getAfterExecution(),
             null,
             execution
         );
@@ -54,25 +56,30 @@ public class GraphUtils {
         return GraphUtils.of(flow, execution, null);
     }
 
-    public static GraphCluster of(Flow flow, Execution execution, List<Trigger> triggers) throws IllegalVariableEvaluationException {
+    public static GraphCluster of(Flow flow, Execution execution, List<TriggerState> triggers) throws IllegalVariableEvaluationException {
         return GraphUtils.of(new GraphCluster(), flow, execution, triggers);
     }
 
-    public static GraphCluster triggers(GraphCluster graph, List<AbstractTrigger> triggersDeclarations, List<Trigger> triggers) throws IllegalVariableEvaluationException {
+    public static GraphCluster triggers(GraphCluster graph, List<AbstractTrigger> triggersDeclarations, List<TriggerState> triggers) throws IllegalVariableEvaluationException {
         GraphCluster triggerCluster = new GraphCluster("Triggers");
 
         graph.addNode(triggerCluster);
 
-        Map<String, Trigger> triggersById = Optional.ofNullable(triggers)
+        Map<String, TriggerState> triggersById = Optional.ofNullable(triggers)
             .map(Collection::stream)
-            .map(s -> s.collect(Collectors.toMap(
-                Trigger::getTriggerId,
-                Function.identity(),
-                (a, b) -> a.getNamespace().length() <= b.getNamespace().length() ? a : b
-            )))
+            .map(
+                s -> s.collect(
+                    Collectors.toMap(
+                        TriggerState::getTriggerId,
+                        Function.identity(),
+                        (a, b) -> a.getNamespace().length() <= b.getNamespace().length() ? a : b
+                    )
+                )
+            )
             .orElse(Collections.emptyMap());
 
-        triggersDeclarations.forEach(trigger -> {
+        triggersDeclarations.stream().filter(trigger -> trigger != null).forEach(trigger ->
+        {
             GraphTrigger triggerNode = new GraphTrigger(trigger, triggersById.get(trigger.getId()));
             triggerCluster.addNode(triggerNode);
             triggerCluster.addEdge(triggerCluster.getRoot(), triggerNode, new Relation());
@@ -80,6 +87,7 @@ public class GraphUtils {
         });
 
         removeFinally(triggerCluster);
+        removeAfterExecution(triggerCluster);
 
         return triggerCluster;
     }
@@ -94,13 +102,13 @@ public class GraphUtils {
 
     private static List<Triple<AbstractGraph, AbstractGraph, Relation>> rawEdges(GraphCluster graphCluster) {
         return Stream.concat(
-                graphCluster.getGraph().edges()
-                    .stream()
-                    .map(r -> Triple.of(r.getSource(), r.getTarget(), r.getValue())),
-                graphCluster.getGraph().nodes()
-                    .stream()
-                    .flatMap(t -> t instanceof GraphCluster cluster ? rawEdges(cluster).stream() : Stream.of())
-            )
+            graphCluster.getGraph().edges()
+                .stream()
+                .map(r -> Triple.of(r.getSource(), r.getTarget(), r.getValue())),
+            graphCluster.getGraph().nodes()
+                .stream()
+                .flatMap(t -> t instanceof GraphCluster cluster ? rawEdges(cluster).stream() : Stream.of())
+        )
             .toList();
     }
 
@@ -114,7 +122,8 @@ public class GraphUtils {
     public static List<Pair<GraphCluster, List<String>>> clusters(GraphCluster graphCluster, List<String> parents) {
         return graphCluster.getGraph().nodes()
             .stream()
-            .flatMap(t -> {
+            .flatMap(t ->
+            {
 
                 if (t instanceof GraphCluster cluster) {
                     ArrayList<String> currentParents = new ArrayList<>(parents);
@@ -131,7 +140,7 @@ public class GraphUtils {
             .toList();
     }
 
-    public static Set<AbstractGraph> successors(GraphCluster graphCluster, List<String> taskRunIds) {
+    public static Set<AbstractGraph> successors(GraphCluster graphCluster, Set<String> taskRunIds) {
         List<FlowGraph.Edge> edges = GraphUtils.edges(graphCluster);
         List<AbstractGraph> nodes = GraphUtils.nodes(graphCluster);
 
@@ -141,9 +150,28 @@ public class GraphUtils {
             .filter(task -> ((AbstractGraphTask) task).getTaskRun() != null && taskRunIds.contains(((AbstractGraphTask) task).getTaskRun().getId()))
             .toList();
 
-        Set<String> edgeUuid = selectedTaskRuns
+        // Collect UIDs of all GraphClusterRoot nodes for efficient lookup
+        Set<String> allClusterRootUids = nodes.stream()
+            .filter(GraphClusterRoot.class::isInstance)
+            .map(AbstractGraph::getUid)
+            .collect(Collectors.toSet());
+
+        // For each selected task, also find the containing cluster's root.
+        // Error handlers are connected to the cluster root (not the task node),
+        // so we must also traverse from root to capture them.
+        Set<String> startingUids = new HashSet<>();
+        for (AbstractGraph task : selectedTaskRuns) {
+            startingUids.add(task.getUid());
+            edges.stream()
+                .filter(edge -> edge.getTarget().equals(task.getUid()))
+                .map(FlowGraph.Edge::getSource)
+                .filter(allClusterRootUids::contains)
+                .forEach(startingUids::add);
+        }
+
+        Set<String> edgeUuid = startingUids
             .stream()
-            .flatMap(task -> recursiveEdge(edges, task.getUid()).stream())
+            .flatMap(uid -> recursiveEdge(edges, uid).stream())
             .map(FlowGraph.Edge::getSource)
             .collect(Collectors.toSet());
 
@@ -157,10 +185,12 @@ public class GraphUtils {
         return edges
             .stream()
             .filter(edge -> edge.getSource().equals(selectedUuid))
-            .flatMap(edge -> Stream.concat(
-                Stream.of(edge),
-                recursiveEdge(edges, edge.getTarget()).stream()
-            ))
+            .flatMap(
+                edge -> Stream.concat(
+                    Stream.of(edge),
+                    recursiveEdge(edges, edge.getTarget()).stream()
+                )
+            )
             .toList();
     }
 
@@ -170,9 +200,19 @@ public class GraphUtils {
         List<Task> errors,
         List<Task> _finally,
         TaskRun parent,
-        Execution execution
-    ) throws IllegalVariableEvaluationException {
-        iterate(graph, tasks, errors, _finally, parent, execution, RelationType.SEQUENTIAL);
+        Execution execution) throws IllegalVariableEvaluationException {
+        iterate(graph, tasks, errors, _finally, null, parent, execution, RelationType.SEQUENTIAL);
+    }
+
+    public static void sequential(
+        GraphCluster graph,
+        List<Task> tasks,
+        List<Task> errors,
+        List<Task> _finally,
+        List<Task> afterExecution,
+        TaskRun parent,
+        Execution execution) throws IllegalVariableEvaluationException {
+        iterate(graph, tasks, errors, _finally, afterExecution, parent, execution, RelationType.SEQUENTIAL);
     }
 
     public static void parallel(
@@ -181,8 +221,7 @@ public class GraphUtils {
         List<Task> errors,
         List<Task> _finally,
         TaskRun parent,
-        Execution execution
-    ) throws IllegalVariableEvaluationException {
+        Execution execution) throws IllegalVariableEvaluationException {
         iterate(graph, tasks, errors, _finally, parent, execution, RelationType.PARALLEL);
     }
 
@@ -192,13 +231,12 @@ public class GraphUtils {
         List<Task> errors,
         List<Task> _finally,
         TaskRun parent,
-        Execution execution
-    ) throws IllegalVariableEvaluationException {
+        Execution execution) throws IllegalVariableEvaluationException {
         for (Map.Entry<String, List<Task>> entry : tasks.entrySet()) {
             fillGraph(graph, entry.getValue(), RelationType.SEQUENTIAL, parent, execution, entry.getKey());
         }
 
-        fillAlternativePaths(graph, errors, _finally, parent, execution, null);
+        fillAlternativePaths(graph, errors, _finally, null, parent, execution, null);
     }
 
     public static void ifElse(
@@ -208,14 +246,13 @@ public class GraphUtils {
         List<Task> _finally,
         List<Task> errors,
         TaskRun parent,
-        Execution execution
-    ) throws IllegalVariableEvaluationException {
+        Execution execution) throws IllegalVariableEvaluationException {
         fillGraph(graph, then, RelationType.SEQUENTIAL, parent, execution, "then");
         if (_else != null) {
             fillGraph(graph, _else, RelationType.SEQUENTIAL, parent, execution, "else");
         }
 
-        fillAlternativePaths(graph, errors, _finally, parent, execution, null);
+        fillAlternativePaths(graph, errors, _finally, null, parent, execution, null);
     }
 
     public static void dag(
@@ -224,11 +261,10 @@ public class GraphUtils {
         List<Task> errors,
         List<Task> _finally,
         TaskRun parent,
-        Execution execution
-    ) throws IllegalVariableEvaluationException {
+        Execution execution) throws IllegalVariableEvaluationException {
         fillGraphDag(graph, tasks, parent, execution);
 
-        fillAlternativePaths(graph, errors, _finally, parent, execution, null);
+        fillAlternativePaths(graph, errors, _finally, null, parent, execution, null);
     }
 
     private static void iterate(
@@ -238,49 +274,86 @@ public class GraphUtils {
         List<Task> _finally,
         TaskRun parent,
         Execution execution,
-        RelationType relationType
-    ) throws IllegalVariableEvaluationException {
+        RelationType relationType) throws IllegalVariableEvaluationException {
+        iterate(graph, tasks, errors, _finally, null, parent, execution, relationType);
+    }
+
+    private static void iterate(
+        GraphCluster graph,
+        List<Task> tasks,
+        List<Task> errors,
+        List<Task> _finally,
+        List<Task> afterExecution,
+        TaskRun parent,
+        Execution execution,
+        RelationType relationType) throws IllegalVariableEvaluationException {
         fillGraph(graph, tasks, relationType, parent, execution, null);
 
-        fillAlternativePaths(graph, errors, _finally, parent, execution, null);
+        fillAlternativePaths(graph, errors, _finally, afterExecution, parent, execution, null);
     }
 
     private static void fillAlternativePaths(
         GraphCluster graph,
         List<Task> errors,
         List<Task> _finally,
+        List<Task> afterExecution,
         TaskRun parent,
         Execution execution,
-        String value
-    ) throws IllegalVariableEvaluationException {
+        String value) throws IllegalVariableEvaluationException {
         // error cases
-        if (errors != null && !errors.isEmpty()) {
+        if (!ListUtils.isEmpty(errors)) {
             fillGraph(graph, errors, RelationType.ERROR, parent, execution, value);
         }
 
         // finally cases
-        if (_finally != null && !_finally.isEmpty()) {
+        if (!ListUtils.isEmpty(_finally)) {
             fillGraph(graph, _finally, RelationType.FINALLY, parent, execution, value);
         } else {
             removeFinally(graph);
         }
+
+        // afterExecution cases
+        if (!ListUtils.isEmpty(afterExecution)) {
+            fillGraph(graph, afterExecution, RelationType.AFTER_EXECUTION, parent, execution, value);
+        } else {
+            removeAfterExecution(graph);
+        }
     }
 
     private static void removeFinally(GraphCluster graph) {
-        // we don't have finally case, so we remove the node, and link all previous link to finally to the end
+        // we don't have finally case, so we remove the node, and link all previous links to finally to the end
         graph.getGraph().edges()
-            .forEach(edge -> {
-                if (edge.getSource() instanceof GraphClusterFinally && edge.getTarget() instanceof GraphClusterEnd) {
+            .forEach(edge ->
+            {
+                if (edge.getSource() instanceof GraphClusterFinally && edge.getTarget() instanceof GraphClusterAfterExecution) {
                     graph.getGraph().edges().remove(edge);
                 }
 
                 if (edge.getTarget() instanceof GraphClusterFinally) {
                     graph.getGraph().edges().remove(edge);
-                    graph.addEdge(edge.getSource(), graph.getEnd(), edge.getValue());
+                    graph.addEdge(edge.getSource(), graph.getAfterExecution(), edge.getValue());
                 }
             });
 
         graph.getGraph().removeNode(graph.getFinally());
+    }
+
+    private static void removeAfterExecution(GraphCluster graph) {
+        // we don't have afterExecution, so we remove the node, and link all previous links to afterExecution to the end
+        graph.getGraph().edges()
+            .forEach(edge ->
+            {
+                if (edge.getSource() instanceof GraphClusterAfterExecution && edge.getTarget() instanceof GraphClusterEnd) {
+                    graph.getGraph().edges().remove(edge);
+                }
+
+                if (edge.getTarget() instanceof GraphClusterAfterExecution) {
+                    graph.getGraph().edges().remove(edge);
+                    graph.addEdge(edge.getSource(), graph.getEnd(), edge.getValue());
+                }
+            });
+
+        graph.getGraph().removeNode(graph.getAfterExecution());
     }
 
     private static void fillGraph(
@@ -289,21 +362,29 @@ public class GraphUtils {
         RelationType relationType,
         TaskRun parent,
         Execution execution,
-        String value
-    ) throws IllegalVariableEvaluationException {
+        String value) throws IllegalVariableEvaluationException {
         Iterator<Task> iterator = tasks.iterator();
         AbstractGraph previous;
 
-        previous = Optional.<AbstractGraph>ofNullable(graph.getTaskNode()).orElse(graph.getRoot());
+        previous = Optional.<AbstractGraph> ofNullable(graph.getTaskNode()).orElse(graph.getRoot());
         if (relationType == RelationType.FINALLY) {
             previous = graph.getFinally();
 
-            graph.getGraph().removeEdge(graph.getFinally(), graph.getEnd());
+            graph.getGraph().removeEdge(graph.getFinally(), graph.getAfterExecution());
+        }
+        if (relationType == RelationType.AFTER_EXECUTION) {
+            previous = graph.getAfterExecution();
+
+            graph.getGraph().removeEdge(graph.getAfterExecution(), graph.getEnd());
         }
 
         boolean isFirst = true;
         while (iterator.hasNext()) {
             Task currentTask = iterator.next();
+            if (currentTask == null) {
+                continue;
+            }
+
             for (TaskRun currentTaskRun : findTaskRuns(currentTask, execution, parent)) {
                 AbstractGraph currentGraph;
                 List<String> parentValues = null;
@@ -337,7 +418,7 @@ public class GraphUtils {
                 // add the node
                 graph.addNode(currentGraph);
 
-                if (relationType == RelationType.ERROR || relationType == RelationType.FINALLY) {
+                if (relationType == RelationType.ERROR || relationType == RelationType.FINALLY || relationType == RelationType.AFTER_EXECUTION) {
                     currentGraph.updateWithChildren(AbstractGraph.BranchType.valueOf(relationType.name()));
                 }
 
@@ -360,18 +441,20 @@ public class GraphUtils {
                     previous = currentGraph;
                 }
 
-                // link to end task
+                // link to next edge
+                AbstractGraph nextEdge = relationType == RelationType.AFTER_EXECUTION ? graph.getEnd()
+                    : (relationType == RelationType.FINALLY ? graph.getAfterExecution() : graph.getFinally());
                 if (GraphUtils.isAllLinkToEnd(relationType)) {
                     if (currentGraph instanceof GraphCluster && ((GraphCluster) currentGraph).getEnd() != null) {
                         graph.addEdge(
                             ((GraphCluster) currentGraph).getEnd(),
-                            relationType == RelationType.FINALLY ? graph.getEnd() : graph.getFinally(),
+                            nextEdge,
                             new Relation()
                         );
                     } else {
                         graph.addEdge(
                             currentGraph,
-                            relationType == RelationType.FINALLY ? graph.getEnd() : graph.getFinally(),
+                            nextEdge,
                             new Relation()
                         );
                     }
@@ -382,7 +465,7 @@ public class GraphUtils {
                 if (!iterator.hasNext() && !isAllLinkToEnd(relationType)) {
                     graph.addEdge(
                         currentGraph instanceof GraphCluster ? ((GraphCluster) currentGraph).getEnd() : currentGraph,
-                        relationType == RelationType.FINALLY ? graph.getEnd() : graph.getFinally(),
+                        nextEdge,
                         new Relation()
                     );
                 }
@@ -398,8 +481,7 @@ public class GraphUtils {
         GraphCluster graph,
         List<Dag.DagTask> tasks,
         TaskRun parent,
-        Execution execution
-    ) throws IllegalVariableEvaluationException {
+        Execution execution) throws IllegalVariableEvaluationException {
         List<GraphTask> nodeTaskCreated = new ArrayList<>();
         List<String> nodeCreatedIds = new ArrayList<>();
 
@@ -412,14 +494,15 @@ public class GraphUtils {
 
         AbstractGraph previous;
 
-        previous = Optional.<AbstractGraph>ofNullable(graph.getTaskNode()).orElse(graph.getRoot());
+        previous = Optional.<AbstractGraph> ofNullable(graph.getTaskNode()).orElse(graph.getRoot());
 
         while (nodeCreatedIds.size() < tasks.size()) {
             Iterator<Dag.DagTask> iterator = tasks.stream().filter(taskDepend ->
-                // Check if the task has no dependencies OR all if its dependencies have been treated
-                (taskDepend.getDependsOn() == null || new HashSet<>(nodeCreatedIds).containsAll(taskDepend.getDependsOn()))
-                    // AND if the task has not been treated yet
-                    && !nodeCreatedIds.contains(taskDepend.getTask().getId())).iterator();
+            // Check if the task has no dependencies OR all if its dependencies have been treated
+            (taskDepend.getDependsOn() == null || new HashSet<>(nodeCreatedIds).containsAll(taskDepend.getDependsOn()))
+                // AND if the task has not been treated yet
+                && !nodeCreatedIds.contains(taskDepend.getTask().getId())
+            ).iterator();
             while (iterator.hasNext()) {
                 Dag.DagTask currentTask = iterator.next();
                 for (TaskRun currentTaskRun : findTaskRuns(currentTask.getTask(), execution, parent)) {
@@ -470,11 +553,13 @@ public class GraphUtils {
                                     .filter(node -> node instanceof GraphCluster)
                                     .filter(node -> node.getUid().endsWith(dependsOn))
                                     .findFirst()
-                                    .ifPresent(previousClusterNodeEnd -> graph.addEdge(
-                                        ((GraphCluster) previousClusterNodeEnd).getEnd(),
-                                        toEdgeTarget(currentGraph),
-                                        relation
-                                    ));
+                                    .ifPresent(
+                                        previousClusterNodeEnd -> graph.addEdge(
+                                            ((GraphCluster) previousClusterNodeEnd).getEnd(),
+                                            toEdgeTarget(currentGraph),
+                                            relation
+                                        )
+                                    );
                             }
                         }
                     }

@@ -1,225 +1,413 @@
 package io.kestra.core.runners;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.file.Files;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.TimeoutException;
+import java.util.stream.IntStream;
+
+import org.apache.commons.lang3.StringUtils;
+
 import io.kestra.core.models.executions.Execution;
+import io.kestra.core.models.executions.ExecutionKilled;
+import io.kestra.core.models.executions.ExecutionKilledExecution;
 import io.kestra.core.models.flows.Flow;
 import io.kestra.core.models.flows.State;
+import io.kestra.core.models.flows.State.History;
+import io.kestra.core.models.flows.State.Type;
+import io.kestra.core.queues.BroadcastQueueInterface;
 import io.kestra.core.queues.QueueException;
-import io.kestra.core.queues.QueueFactoryInterface;
-import io.kestra.core.queues.QueueInterface;
+import io.kestra.core.repositories.ConcurrencyLimitRepositoryInterface;
 import io.kestra.core.repositories.FlowRepositoryInterface;
-import io.kestra.core.utils.TestsUtils;
+import io.kestra.core.services.ExecutionService;
+import io.kestra.core.storages.StorageInterface;
+
 import jakarta.inject.Inject;
-import jakarta.inject.Named;
 import jakarta.inject.Singleton;
-import reactor.core.publisher.Flux;
 
-import java.time.Duration;
-import java.util.Optional;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicReference;
-
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 @Singleton
 public class FlowConcurrencyCaseTest {
+
+    public static final String NAMESPACE = "io.kestra.tests";
     @Inject
-    private RunnerUtils runnerUtils;
+    private StorageInterface storageInterface;
+
+    @Inject
+    protected TestRunnerUtils runnerUtils;
+
+    @Inject
+    private FlowInputOutput flowIO;
 
     @Inject
     private FlowRepositoryInterface flowRepository;
 
     @Inject
-    @Named(QueueFactoryInterface.EXECUTION_NAMED)
-    protected QueueInterface<Execution> executionQueue;
+    private ExecutionService executionService;
 
-    public void flowConcurrencyCancel() throws TimeoutException, QueueException, InterruptedException {
-        Execution execution1 = runnerUtils.runOneUntilRunning(null, "io.kestra.tests", "flow-concurrency-cancel", null, null, Duration.ofSeconds(30));
-        Execution execution2 = runnerUtils.runOne(null, "io.kestra.tests", "flow-concurrency-cancel");
+    @Inject
+    private ConcurrencyLimitRepositoryInterface concurrencyLimitRepository;
 
-        assertThat(execution1.getState().isRunning(), is(true));
-        assertThat(execution2.getState().getCurrent(), is(State.Type.CANCELLED));
+    @Inject
+    protected BroadcastQueueInterface<ExecutionKilled> killQueue;
 
-        CountDownLatch latch1 = new CountDownLatch(1);
+    public void flowConcurrencyCancel(String tenantId) throws TimeoutException, QueueException {
+        Execution execution1 = runnerUtils.runOneUntilRunning(tenantId, NAMESPACE, "flow-concurrency-cancel", null, null, Duration.ofSeconds(30));
+        try {
+            List<Execution> shouldFailExecutions = List.of(
+                runnerUtils.runOne(tenantId, NAMESPACE, "flow-concurrency-cancel"),
+                runnerUtils.runOne(tenantId, NAMESPACE, "flow-concurrency-cancel")
+            );
+            assertThat(execution1.getState().isRunning()).isTrue();
 
-        Flux<Execution> receive = TestsUtils.receive(executionQueue, e -> {
-            if (e.getLeft().getId().equals(execution1.getId())) {
-                if (e.getLeft().getState().getCurrent() == State.Type.SUCCESS) {
-                    latch1.countDown();
-                }
-            }
-
-            // FIXME we should fail if we receive the cancel execution again but on Kafka it happens
-        });
-
-        assertTrue(latch1.await(1, TimeUnit.MINUTES));
-        receive.blockLast();
+            assertThat(shouldFailExecutions.stream().map(Execution::getState).map(State::getCurrent)).allMatch(Type.CANCELLED::equals);
+        } finally {
+            runnerUtils.killExecution(execution1);
+            runnerUtils.awaitExecution(e -> e.getState().isTerminated(), execution1);
+        }
     }
 
-    public void flowConcurrencyFail() throws TimeoutException, QueueException, InterruptedException {
-        Execution execution1 = runnerUtils.runOneUntilRunning(null, "io.kestra.tests", "flow-concurrency-fail", null, null, Duration.ofSeconds(30));
-        Execution execution2 = runnerUtils.runOne(null, "io.kestra.tests", "flow-concurrency-fail");
+    public void flowConcurrencyFail(String tenantId) throws TimeoutException, QueueException {
+        Execution execution1 = runnerUtils.runOneUntilRunning(tenantId, NAMESPACE, "flow-concurrency-fail", null, null, Duration.ofSeconds(30));
+        try {
+            List<Execution> shouldFailExecutions = List.of(
+                runnerUtils.runOne(tenantId, NAMESPACE, "flow-concurrency-fail"),
+                runnerUtils.runOne(tenantId, NAMESPACE, "flow-concurrency-fail")
+            );
 
-        assertThat(execution1.getState().isRunning(), is(true));
-        assertThat(execution2.getState().getCurrent(), is(State.Type.FAILED));
-
-        CountDownLatch latch1 = new CountDownLatch(1);
-
-        Flux<Execution> receive = TestsUtils.receive(executionQueue, e -> {
-            if (e.getLeft().getId().equals(execution1.getId())) {
-                if (e.getLeft().getState().getCurrent() == State.Type.SUCCESS) {
-                    latch1.countDown();
-                }
-            }
-
-            // FIXME we should fail if we receive the cancel execution again but on Kafka it happens
-        });
-
-        assertTrue(latch1.await(1, TimeUnit.MINUTES));
-        receive.blockLast();
+            assertThat(execution1.getState().isRunning()).isTrue();
+            assertThat(shouldFailExecutions.stream().map(Execution::getState).map(State::getCurrent)).allMatch(State.Type.FAILED::equals);
+        } finally {
+            runnerUtils.killExecution(execution1);
+            runnerUtils.awaitExecution(e -> e.getState().isTerminated(), execution1);
+        }
     }
 
-    public void flowConcurrencyQueue() throws TimeoutException, QueueException, InterruptedException {
-        Execution execution1 = runnerUtils.runOneUntilRunning(null, "io.kestra.tests", "flow-concurrency-queue", null, null, Duration.ofSeconds(30));
+    public void flowConcurrencyQueue(String tenantId) throws QueueException {
+        Execution execution1 = runnerUtils.runOneUntilRunning(tenantId, NAMESPACE, "flow-concurrency-queue", null, null, Duration.ofSeconds(30));
         Flow flow = flowRepository
-            .findById(null, "io.kestra.tests", "flow-concurrency-queue", Optional.empty())
+            .findById(tenantId, NAMESPACE, "flow-concurrency-queue", Optional.empty())
             .orElseThrow();
         Execution execution2 = Execution.newExecution(flow, null, null, Optional.empty());
-        executionQueue.emit(execution2);
+        Execution executionResult2 = runnerUtils.emitAndAwaitExecution(e -> e.getState().getCurrent().equals(Type.SUCCESS), execution2);
+        Execution executionResult1 = runnerUtils.awaitExecution(e -> e.getState().getCurrent().equals(Type.SUCCESS), execution1);
 
-        assertThat(execution1.getState().isRunning(), is(true));
-        assertThat(execution2.getState().getCurrent(), is(State.Type.CREATED));
+        assertThat(execution1.getState().isRunning()).isTrue();
+        assertThat(execution2.getState().getCurrent()).isEqualTo(State.Type.CREATED);
 
-        var executionResult1  = new AtomicReference<Execution>();
-        var executionResult2  = new AtomicReference<Execution>();
-
-        CountDownLatch latch1 = new CountDownLatch(1);
-        CountDownLatch latch2 = new CountDownLatch(1);
-        CountDownLatch latch3 = new CountDownLatch(1);
-
-        Flux<Execution> receive = TestsUtils.receive(executionQueue, e -> {
-            if (e.getLeft().getId().equals(execution1.getId())) {
-                executionResult1.set(e.getLeft());
-                if (e.getLeft().getState().getCurrent() == State.Type.SUCCESS) {
-                    latch1.countDown();
-                }
-            }
-
-            if (e.getLeft().getId().equals(execution2.getId())) {
-                executionResult2.set(e.getLeft());
-                if (e.getLeft().getState().getCurrent() == State.Type.RUNNING) {
-                    latch2.countDown();
-                }
-                if (e.getLeft().getState().getCurrent() == State.Type.SUCCESS) {
-                    latch3.countDown();
-                }
-            }
-        });
-
-        assertTrue(latch1.await(1, TimeUnit.MINUTES));
-        assertTrue(latch2.await(1, TimeUnit.MINUTES));
-        assertTrue(latch3.await(1, TimeUnit.MINUTES));
-        receive.blockLast();
-
-        assertThat(executionResult1.get().getState().getCurrent(), is(State.Type.SUCCESS));
-        assertThat(executionResult2.get().getState().getCurrent(), is(State.Type.SUCCESS));
-        assertThat(executionResult2.get().getState().getHistories().getFirst().getState(), is(State.Type.CREATED));
-        assertThat(executionResult2.get().getState().getHistories().get(1).getState(), is(State.Type.QUEUED));
-        assertThat(executionResult2.get().getState().getHistories().get(2).getState(), is(State.Type.RUNNING));
+        assertThat(executionResult1.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
+        assertThat(executionResult2.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
+        assertThat(executionResult2.getState().getHistories().getFirst().getState()).isEqualTo(State.Type.CREATED);
+        assertThat(executionResult2.getState().getHistories().get(1).getState()).isEqualTo(State.Type.QUEUED);
+        assertThat(executionResult2.getState().getHistories().get(2).getState()).isEqualTo(State.Type.RUNNING);
     }
 
-    public void flowConcurrencyQueuePause() throws TimeoutException, QueueException, InterruptedException {
-        Execution execution1 = runnerUtils.runOneUntilRunning(null, "io.kestra.tests", "flow-concurrency-queue-pause", null, null, Duration.ofSeconds(30));
+    public void flowConcurrencyQueuePause(String tenantId) throws QueueException {
+        Execution execution1 = runnerUtils.runOneUntilPaused(tenantId, NAMESPACE, "flow-concurrency-queue-pause");
         Flow flow = flowRepository
-            .findById(null, "io.kestra.tests", "flow-concurrency-queue-pause", Optional.empty())
+            .findById(tenantId, NAMESPACE, "flow-concurrency-queue-pause", Optional.empty())
             .orElseThrow();
         Execution execution2 = Execution.newExecution(flow, null, null, Optional.empty());
-        executionQueue.emit(execution2);
+        Execution secondExecutionResult = runnerUtils.emitAndAwaitExecution(e -> e.getState().getCurrent().equals(Type.SUCCESS), execution2);
+        Execution firstExecutionResult = runnerUtils.awaitExecution(e -> e.getState().getCurrent().equals(Type.SUCCESS), execution1);
 
-        assertThat(execution1.getState().isRunning(), is(true));
-        assertThat(execution2.getState().getCurrent(), is(State.Type.CREATED));
-
-        var executionResult1  = new AtomicReference<Execution>();
-        var executionResult2  = new AtomicReference<Execution>();
-
-        CountDownLatch latch1 = new CountDownLatch(1);
-        CountDownLatch latch2 = new CountDownLatch(1);
-        CountDownLatch latch3 = new CountDownLatch(1);
-
-        Flux<Execution> receive = TestsUtils.receive(executionQueue, e -> {
-            if (e.getLeft().getId().equals(execution1.getId())) {
-                executionResult1.set(e.getLeft());
-                if (e.getLeft().getState().getCurrent() == State.Type.SUCCESS) {
-                    latch1.countDown();
-                }
-            }
-
-            if (e.getLeft().getId().equals(execution2.getId())) {
-                executionResult2.set(e.getLeft());
-                if (e.getLeft().getState().getCurrent() == State.Type.RUNNING) {
-                    latch2.countDown();
-                }
-                if (e.getLeft().getState().getCurrent() == State.Type.SUCCESS) {
-                    latch3.countDown();
-                }
-            }
-        });
-
-        assertTrue(latch1.await(1, TimeUnit.MINUTES));
-        assertTrue(latch2.await(1, TimeUnit.MINUTES));
-        assertTrue(latch3.await(1, TimeUnit.MINUTES));
-        receive.blockLast();
-
-        assertThat(executionResult1.get().getState().getCurrent(), is(State.Type.SUCCESS));
-        assertThat(executionResult2.get().getState().getCurrent(), is(State.Type.SUCCESS));
-        assertThat(executionResult2.get().getState().getHistories().getFirst().getState(), is(State.Type.CREATED));
-        assertThat(executionResult2.get().getState().getHistories().get(1).getState(), is(State.Type.QUEUED));
-        assertThat(executionResult2.get().getState().getHistories().get(2).getState(), is(State.Type.RUNNING));
+        assertThat(firstExecutionResult.getId()).isEqualTo(execution1.getId());
+        assertThat(firstExecutionResult.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
+        assertThat(secondExecutionResult.getId()).isEqualTo(execution2.getId());
+        assertThat(secondExecutionResult.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
+        assertThat(secondExecutionResult.getState().getHistories().getFirst().getState()).isEqualTo(State.Type.CREATED);
+        assertThat(secondExecutionResult.getState().getHistories().get(1).getState()).isEqualTo(State.Type.QUEUED);
+        assertThat(secondExecutionResult.getState().getHistories().get(2).getState()).isEqualTo(State.Type.RUNNING);
     }
 
-    public void flowConcurrencyCancelPause() throws TimeoutException, QueueException, InterruptedException {
-        Execution execution1 = runnerUtils.runOneUntilRunning(null, "io.kestra.tests", "flow-concurrency-cancel-pause", null, null, Duration.ofSeconds(30));
+    public void flowConcurrencyCancelPause(String tenantId) throws QueueException {
+        Execution execution1 = runnerUtils.runOneUntilPaused(tenantId, NAMESPACE, "flow-concurrency-cancel-pause");
         Flow flow = flowRepository
-            .findById(null, "io.kestra.tests", "flow-concurrency-cancel-pause", Optional.empty())
+            .findById(tenantId, NAMESPACE, "flow-concurrency-cancel-pause", Optional.empty())
             .orElseThrow();
         Execution execution2 = Execution.newExecution(flow, null, null, Optional.empty());
-        executionQueue.emit(execution2);
+        Execution secondExecutionResult = runnerUtils.emitAndAwaitExecution(e -> e.getState().getCurrent().equals(Type.CANCELLED), execution2);
+        Execution firstExecutionResult = runnerUtils.awaitExecution(e -> e.getState().getCurrent().equals(Type.SUCCESS), execution1);
 
-        assertThat(execution1.getState().isRunning(), is(true));
-        assertThat(execution2.getState().getCurrent(), is(State.Type.CREATED));
-
-        var executionResult1  = new AtomicReference<Execution>();
-        var executionResult2  = new AtomicReference<Execution>();
-
-        CountDownLatch latch1 = new CountDownLatch(1);
-        CountDownLatch latch2 = new CountDownLatch(1);
-
-        Flux<Execution> receive = TestsUtils.receive(executionQueue, e -> {
-            if (e.getLeft().getId().equals(execution1.getId())) {
-                executionResult1.set(e.getLeft());
-                if (e.getLeft().getState().getCurrent() == State.Type.SUCCESS) {
-                    latch1.countDown();
-                }
-            }
-
-            if (e.getLeft().getId().equals(execution2.getId())) {
-                executionResult2.set(e.getLeft());
-                if (e.getLeft().getState().getCurrent() == State.Type.CANCELLED) {
-                    latch2.countDown();
-                }
-            }
-        });
-
-        assertTrue(latch1.await(1, TimeUnit.MINUTES));
-        assertTrue(latch2.await(1, TimeUnit.MINUTES));
-        receive.blockLast();
-
-        assertThat(executionResult1.get().getState().getCurrent(), is(State.Type.SUCCESS));
-        assertThat(executionResult2.get().getState().getCurrent(), is(State.Type.CANCELLED));
-        assertThat(executionResult2.get().getState().getHistories().getFirst().getState(), is(State.Type.CREATED));
-        assertThat(executionResult2.get().getState().getHistories().get(1).getState(), is(State.Type.CANCELLED));
+        assertThat(firstExecutionResult.getId()).isEqualTo(execution1.getId());
+        assertThat(firstExecutionResult.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
+        assertThat(secondExecutionResult.getId()).isEqualTo(execution2.getId());
+        assertThat(secondExecutionResult.getState().getCurrent()).isEqualTo(State.Type.CANCELLED);
+        assertThat(secondExecutionResult.getState().getHistories().getFirst().getState()).isEqualTo(State.Type.CREATED);
+        assertThat(secondExecutionResult.getState().getHistories().get(1).getState()).isEqualTo(State.Type.CANCELLED);
     }
+
+    public void flowConcurrencyWithForEachItem(String tenantId) throws QueueException, URISyntaxException, IOException {
+        URI file = storageUpload(tenantId);
+        Map<String, Object> inputs = Map.of("file", file.toString(), "batch", 4);
+        Execution forEachItem = runnerUtils.runOneUntilRunning(
+            tenantId, NAMESPACE, "flow-concurrency-for-each-item", null,
+            (flow, execution1) -> flowIO.readExecutionInputs(flow, execution1, inputs), Duration.ofSeconds(5)
+        );
+        assertThat(forEachItem.getState().getCurrent()).isEqualTo(Type.RUNNING);
+
+        Execution terminated = runnerUtils.awaitExecution(e -> e.getState().isTerminated(), forEachItem);
+        assertThat(terminated.getState().getCurrent()).isEqualTo(Type.SUCCESS);
+
+        List<Execution> executions = runnerUtils.awaitFlowExecutionNumber(2, tenantId, NAMESPACE, "flow-concurrency-queue");
+
+        assertThat(executions).extracting(e -> e.getState().getCurrent()).containsOnly(Type.SUCCESS);
+        assertThat(
+            executions.stream()
+                .map(e -> e.getState().getHistories())
+                .flatMap(List::stream)
+                .map(History::getState)
+                .toList()
+        ).contains(Type.QUEUED);
+    }
+
+    public void flowConcurrencyQueueRestarted(String tenantId) throws Exception {
+        Execution execution1 = runnerUtils.runOneUntilRunning(
+            tenantId, NAMESPACE,
+            "flow-concurrency-queue-fail", null, null, Duration.ofSeconds(30)
+        );
+        Flow flow = flowRepository
+            .findById(tenantId, NAMESPACE, "flow-concurrency-queue-fail", Optional.empty())
+            .orElseThrow();
+        Execution execution2 = Execution.newExecution(flow, null, null, Optional.empty());
+        runnerUtils.emitAndAwaitExecution(e -> e.getState().getCurrent().equals(Type.RUNNING), execution2);
+
+        // here the first fail and the second is now running.
+        // we restart the first one, it should be queued then fail again.
+        Execution failedExecution = runnerUtils.awaitExecution(e -> e.getState().getCurrent().equals(Type.FAILED), execution1);
+        Execution restarted = executionService.restart(failedExecution, flow, null);
+        Execution executionResult1 = runnerUtils.restartExecution(
+            e -> e.getState().getHistories().stream().anyMatch(history -> history.getState() == Type.RESTARTED) && e.getState().getCurrent().equals(Type.FAILED),
+            restarted
+        );
+        Execution executionResult2 = runnerUtils.awaitExecution(e -> e.getState().getCurrent().equals(Type.FAILED), execution2);
+
+        assertThat(executionResult1.getState().getCurrent()).isEqualTo(Type.FAILED);
+        // it should have been queued after restarted
+        List<Type> stateList = executionResult1.getState().getHistories().stream().map(History::getState).toList();
+        assertThat(stateList).contains(Type.RESTARTED);
+        assertThat(stateList).contains(Type.QUEUED);
+        assertThat(executionResult2.getState().getCurrent()).isEqualTo(Type.FAILED);
+        assertThat(executionResult2.getState().getHistories().getFirst().getState()).isEqualTo(State.Type.CREATED);
+        assertThat(executionResult2.getState().getHistories().get(1).getState()).isEqualTo(State.Type.QUEUED);
+        assertThat(executionResult2.getState().getHistories().get(2).getState()).isEqualTo(State.Type.RUNNING);
+    }
+
+    public void flowConcurrencyQueueAfterExecution(String tenantId) throws QueueException {
+        Execution execution1 = runnerUtils.runOneUntilRunning(tenantId, NAMESPACE, "flow-concurrency-queue-after-execution", null, null, Duration.ofSeconds(30));
+        Flow flow = flowRepository
+            .findById(tenantId, NAMESPACE, "flow-concurrency-queue-after-execution", Optional.empty())
+            .orElseThrow();
+        Execution execution2 = Execution.newExecution(flow, null, null, Optional.empty());
+        Execution executionResult2 = runnerUtils.emitAndAwaitExecution(e -> e.getState().getCurrent().equals(Type.SUCCESS), execution2);
+        Execution executionResult1 = runnerUtils.awaitExecution(e -> e.getState().getCurrent().equals(Type.SUCCESS), execution1);
+
+        assertThat(executionResult1.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
+        assertThat(executionResult2.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
+        assertThat(executionResult2.getState().getHistories().getFirst().getState()).isEqualTo(State.Type.CREATED);
+        assertThat(executionResult2.getState().getHistories().get(1).getState()).isEqualTo(State.Type.QUEUED);
+        assertThat(executionResult2.getState().getHistories().get(2).getState()).isEqualTo(State.Type.RUNNING);
+    }
+
+    public void flowConcurrencySubflow(String tenantId) throws TimeoutException, QueueException {
+        runnerUtils.runOneUntilRunning(tenantId, NAMESPACE, "flow-concurrency-subflow", null, null, Duration.ofSeconds(30));
+        runnerUtils.runOne(tenantId, NAMESPACE, "flow-concurrency-subflow");
+
+        List<Execution> subFlowExecs = runnerUtils.awaitFlowExecutionNumber(2, tenantId, NAMESPACE, "flow-concurrency-cancel");
+        assertThat(subFlowExecs).extracting(e -> e.getState().getCurrent()).containsExactlyInAnyOrder(Type.SUCCESS, Type.CANCELLED);
+
+        // run another execution to be sure that everything works (purge is correctly done)
+        Execution execution3 = runnerUtils.runOne(tenantId, NAMESPACE, "flow-concurrency-subflow");
+        assertThat(execution3.getState().getCurrent()).isEqualTo(Type.SUCCESS);
+        runnerUtils.awaitFlowExecution(e -> e.getState().getCurrent().equals(Type.SUCCESS), tenantId, NAMESPACE, "flow-concurrency-cancel");
+    }
+
+    public void flowConcurrencyParallelSubflowKill(String tenantId) throws QueueException {
+        Execution parent = runnerUtils.runOneUntilRunning(tenantId, NAMESPACE, "flow-concurrency-parallel-subflow-kill", null, null, Duration.ofSeconds(30));
+        Execution queued = runnerUtils.awaitFlowExecution(e -> e.getState().isQueued(), tenantId, NAMESPACE, "flow-concurrency-parallel-subflow-kill-child");
+
+        // Kill the parent
+        killQueue.emit(
+            ExecutionKilledExecution
+                .builder()
+                .state(ExecutionKilled.State.REQUESTED)
+                .executionId(parent.getId())
+                .isOnKillCascade(true)
+                .tenantId(tenantId)
+                .build()
+        );
+
+        Execution terminated = runnerUtils.awaitExecution(e -> e.getState().isTerminated(), queued);
+        assertThat(terminated.getState().getCurrent()).isEqualTo(State.Type.KILLED);
+        assertThat(terminated.getState().getHistories().stream().noneMatch(h -> h.getState() == Type.RUNNING)).isTrue();
+        assertThat(terminated.getTaskRunList()).isNull();
+    }
+
+    public void flowConcurrencyKilled(String tenantId) throws QueueException, InterruptedException {
+        Flow flow = flowRepository
+            .findById(tenantId, NAMESPACE, "flow-concurrency-queue-killed", Optional.empty())
+            .orElseThrow();
+        Execution execution1 = runnerUtils.runOneUntilRunning(tenantId, NAMESPACE, "flow-concurrency-queue-killed", null, null, Duration.ofSeconds(30));
+        Execution execution2 = runnerUtils.emitAndAwaitExecution(e -> e.getState().getCurrent().equals(Type.QUEUED), Execution.newExecution(flow, null, null, Optional.empty()));
+        Execution execution3 = runnerUtils.emitAndAwaitExecution(e -> e.getState().getCurrent().equals(Type.QUEUED), Execution.newExecution(flow, null, null, Optional.empty()));
+
+        try {
+            assertThat(execution1.getState().isRunning()).isTrue();
+            assertThat(execution2.getState().getCurrent()).isEqualTo(Type.QUEUED);
+            assertThat(execution3.getState().getCurrent()).isEqualTo(Type.QUEUED);
+
+            // we kill execution 1, execution 2 should run but not execution 3
+            killQueue.emit(
+                ExecutionKilledExecution
+                    .builder()
+                    .state(ExecutionKilled.State.REQUESTED)
+                    .executionId(execution1.getId())
+                    .isOnKillCascade(true)
+                    .tenantId(tenantId)
+                    .build()
+            );
+
+            Execution killed = runnerUtils.awaitExecution(e -> e.getState().getCurrent().equals(Type.KILLED), execution1);
+            assertThat(killed.getState().getCurrent()).isEqualTo(Type.KILLED);
+            assertThat(killed.getState().getHistories().stream().anyMatch(h -> h.getState() == Type.RUNNING)).isTrue();
+
+            // we now check that execution 2 is running
+            Execution running = runnerUtils.awaitExecution(e -> e.getState().getCurrent().equals(Type.RUNNING), execution2);
+            assertThat(running.getState().getCurrent()).isEqualTo(Type.RUNNING);
+
+            // we check that execution 3 is still queued
+            Thread.sleep(100); // wait a little to be 100% sure
+            Execution queued = runnerUtils.awaitExecution(e -> e.getState().isQueued(), execution3);
+            assertThat(queued.getState().getCurrent()).isEqualTo(Type.QUEUED);
+        } finally {
+            // kill everything to avoid dangling executions
+            runnerUtils.killExecution(execution2);
+            runnerUtils.killExecution(execution3);
+
+            // await that they are all terminated, note that as KILLED is received twice, some messages would still be pending, but this is the best we can do
+            runnerUtils.awaitFlowExecutionNumber(3, tenantId, NAMESPACE, "flow-concurrency-queue-killed");
+        }
+    }
+
+    public void flowConcurrencyQueueKilled(String tenantId) throws QueueException, InterruptedException {
+        Flow flow = flowRepository
+            .findById(tenantId, NAMESPACE, "flow-concurrency-queue-killed", Optional.empty())
+            .orElseThrow();
+        Execution execution1 = runnerUtils.runOneUntilRunning(tenantId, NAMESPACE, "flow-concurrency-queue-killed", null, null, Duration.ofSeconds(30));
+        Execution execution2 = runnerUtils.emitAndAwaitExecution(e -> e.getState().getCurrent().equals(Type.QUEUED), Execution.newExecution(flow, null, null, Optional.empty()));
+        Execution execution3 = runnerUtils.emitAndAwaitExecution(e -> e.getState().getCurrent().equals(Type.QUEUED), Execution.newExecution(flow, null, null, Optional.empty()));
+
+        try {
+            assertThat(execution1.getState().isRunning()).isTrue();
+            assertThat(execution2.getState().getCurrent()).isEqualTo(Type.QUEUED);
+            assertThat(execution3.getState().getCurrent()).isEqualTo(Type.QUEUED);
+
+            // we kill execution 2, execution 3 should not run
+            killQueue.emit(
+                ExecutionKilledExecution
+                    .builder()
+                    .state(ExecutionKilled.State.REQUESTED)
+                    .executionId(execution2.getId())
+                    .isOnKillCascade(true)
+                    .tenantId(tenantId)
+                    .build()
+            );
+
+            Execution killed = runnerUtils.awaitExecution(e -> e.getState().getCurrent().equals(Type.KILLED), execution2);
+            assertThat(killed.getState().getCurrent()).isEqualTo(Type.KILLED);
+            assertThat(killed.getState().getHistories().stream().noneMatch(h -> h.getState() == Type.RUNNING)).isTrue();
+
+            // we now check that execution 3 is still queued
+            Thread.sleep(100); // wait a little to be 100% sure
+            Execution queued = runnerUtils.awaitExecution(e -> e.getState().isQueued(), execution3);
+            assertThat(queued.getState().getCurrent()).isEqualTo(Type.QUEUED);
+        } finally {
+            // kill everything to avoid dangling executions
+            runnerUtils.killExecution(execution1);
+            runnerUtils.killExecution(execution3);
+
+            // await that they are all terminated, note that as KILLED is received twice, some messages would still be pending, but this is the best we can do
+            runnerUtils.awaitFlowExecutionNumber(3, tenantId, NAMESPACE, "flow-concurrency-queue-killed");
+        }
+    }
+
+    public void flowConcurrencyQueuedProtection(String tenantId) throws QueueException, InterruptedException {
+        Execution execution1 = runnerUtils.runOneUntilRunning(tenantId, NAMESPACE, "flow-concurrency-queue", null, null, Duration.ofSeconds(30));
+        assertThat(execution1.getState().isRunning()).isTrue();
+
+        Flow flow = flowRepository
+            .findById(tenantId, NAMESPACE, "flow-concurrency-queue", Optional.empty())
+            .orElseThrow();
+        Execution execution2 = runnerUtils.emitAndAwaitExecution(e -> e.getState().isQueued(), Execution.newExecution(flow, null, null, Optional.empty()));
+        assertThat(execution2.getState().getCurrent()).isEqualTo(State.Type.QUEUED);
+
+        // manually update the concurrency count so that queued protection kicks in and no new execution would be popped
+        ConcurrencyLimit concurrencyLimit = concurrencyLimitRepository.findById(tenantId, NAMESPACE, "flow-concurrency-queue").orElseThrow();
+        concurrencyLimit = concurrencyLimit.withRunning(concurrencyLimit.getRunning() + 1);
+        concurrencyLimitRepository.update(concurrencyLimit);
+
+        Execution executionResult1 = runnerUtils.awaitExecution(e -> e.getState().getCurrent().equals(State.Type.SUCCESS), execution1);
+        assertThat(executionResult1.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
+
+        // we wait for a few ms and checked that the second execution is still queued
+        Thread.sleep(500);
+        Execution executionResult2 = runnerUtils.awaitExecution(e -> e.getState().isQueued(), execution2);
+        assertThat(executionResult2.getState().getCurrent()).isEqualTo(State.Type.QUEUED);
+
+        // we manually reset the concurrency count to avoid messing with any other tests
+        concurrencyLimitRepository.update(concurrencyLimit.withRunning(concurrencyLimit.getRunning() - 1));
+    }
+
+    void flowConcurrencyScheduled(String tenantId) throws QueueException {
+        Execution execution1 = runnerUtils.runOneUntilRunning(tenantId, NAMESPACE, "flow-concurrency-queue", null, null, Duration.ofSeconds(30));
+        assertThat(execution1.getState().isRunning()).isTrue();
+
+        Flow flow = flowRepository
+            .findById(tenantId, NAMESPACE, "flow-concurrency-queue", Optional.empty())
+            .orElseThrow();
+
+        Execution scheduledExecution = Execution.newExecution(flow, null, null, Optional.empty())
+            .withScheduleDate(java.time.Instant.now().plusSeconds(1));
+
+        Execution execution2 = runnerUtils.emitAndAwaitExecution(
+            e -> e.getState().getCurrent().equals(State.Type.QUEUED) || e.getState().getCurrent().equals(State.Type.RUNNING),
+            scheduledExecution,
+            Duration.ofSeconds(10)
+        );
+
+        assertThat(execution2.getState().getCurrent()).isEqualTo(State.Type.QUEUED);
+
+        // cleanup
+        runnerUtils.awaitExecution(e -> e.getState().getCurrent().equals(State.Type.SUCCESS), execution1);
+        runnerUtils.awaitExecution(e -> e.getState().getCurrent().equals(State.Type.SUCCESS), execution2);
+    }
+
+    private URI storageUpload(String tenantId) throws URISyntaxException, IOException {
+        File tempFile = File.createTempFile("file", ".txt");
+
+        Files.write(tempFile.toPath(), content());
+
+        return storageInterface.put(
+            tenantId,
+            null,
+            new URI("/file/storage/file.txt"),
+            new FileInputStream(tempFile)
+        );
+    }
+
+    private List<String> content() {
+        return IntStream
+            .range(0, 7)
+            .mapToObj(value -> StringUtils.leftPad(value + "", 20))
+            .toList();
+    }
+
 }

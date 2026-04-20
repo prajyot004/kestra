@@ -1,24 +1,25 @@
 package io.kestra.core.utils;
 
-import com.google.common.collect.ImmutableMap;
-import io.kestra.core.junit.annotations.KestraTest;
 import org.junit.jupiter.api.Test;
+
+import com.google.common.collect.ImmutableMap;
+
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.flows.Flow;
 
+import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.containsString;
+import static org.assertj.core.api.Assertions.assertThat;
 
-@KestraTest
+@MicronautTest
 class UriProviderTest {
     @Inject
     UriProvider uriProvider;
 
     @Test
     void root() {
-        assertThat(uriProvider.rootUrl().toString(), containsString("mysuperhost.com/subpath/"));
+        assertThat(uriProvider.rootUrl().toString()).contains("mysuperhost.com/subpath/");
     }
 
     @Test
@@ -26,11 +27,11 @@ class UriProviderTest {
         Flow flow = TestsUtils.mockFlow();
         Execution execution = TestsUtils.mockExecution(flow, ImmutableMap.of());
 
-        assertThat(uriProvider.executionUrl(execution).toString(), containsString("mysuperhost.com/subpath/ui"));
-        assertThat(uriProvider.flowUrl(execution).toString(), containsString(flow.getNamespace() + "/" + flow.getId()));
+        assertThat(uriProvider.executionUrl(execution).toString()).contains("mysuperhost.com/subpath/ui");
+        assertThat(uriProvider.flowUrl(execution).toString()).contains(flow.getNamespace() + "/" + flow.getId());
 
-        assertThat(uriProvider.executionUrl(execution).toString(), containsString("mysuperhost.com/subpath/ui"));
-        assertThat(uriProvider.flowUrl(flow).toString(), containsString(flow.getNamespace() + "/" + flow.getId()));
+        assertThat(uriProvider.executionUrl(execution).toString()).contains("mysuperhost.com/subpath/ui");
+        assertThat(uriProvider.flowUrl(flow).toString()).contains(flow.getNamespace() + "/" + flow.getId());
     }
 
     @Test
@@ -38,8 +39,8 @@ class UriProviderTest {
         Flow flow = TestsUtils.mockFlow();
         Execution execution = TestsUtils.mockExecution(flow, ImmutableMap.of());
 
-        assertThat(uriProvider.executionUrl(execution).toString(), containsString("mysuperhost.com/subpath/ui"));
-        assertThat(uriProvider.executionUrl(execution).toString(), containsString(flow.getNamespace() + "/" + flow.getId() + "/" + execution.getId()));
+        assertThat(uriProvider.executionUrl(execution).toString()).contains("mysuperhost.com/subpath/ui");
+        assertThat(uriProvider.executionUrl(execution).toString()).contains(flow.getNamespace() + "/" + flow.getId() + "/" + execution.getId());
     }
 
     @Test
@@ -50,7 +51,7 @@ class UriProviderTest {
             .build();
         Execution execution = TestsUtils.mockExecution(flow, ImmutableMap.of());
 
-        assertThat(uriProvider.executionUrl(execution).toString(), containsString("mysuperhost.com/subpath/ui/my-tenant"));
-        assertThat(uriProvider.flowUrl(flow).toString(), containsString("mysuperhost.com/subpath/ui/my-tenant"));
+        assertThat(uriProvider.executionUrl(execution).toString()).contains("mysuperhost.com/subpath/ui/my-tenant");
+        assertThat(uriProvider.flowUrl(flow).toString()).contains("mysuperhost.com/subpath/ui/my-tenant");
     }
 }

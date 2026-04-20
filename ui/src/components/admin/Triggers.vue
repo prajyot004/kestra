@@ -1,44 +1,67 @@
 <template>
-    <top-nav-bar :title="routeInfo.title" />
-    <section data-component="FILENAME_PLACEHOLDER" class="container" v-if="ready">
+    <TopNavBar :title="routeInfo.title">
+        <template #additional-right>
+            <el-button :icon="Download" @click="exportTriggersAsStream()">
+                {{ $t('export_csv') }}
+            </el-button>
+        </template>
+    </TopNavBar>
+    <section class="container" v-if="ready">
         <div>
-            <data-table
+            <DataTable
                 @page-changed="onPageChanged"
                 ref="dataTable"
                 :total="total"
             >
                 <template #navbar>
-                    <KestraFilter
-                        prefix="triggers"
-                        :include="['namespace', 'trigger_state']"
-                        :buttons="{
-                            refresh: {shown: true, callback: load},
-                            settings: {shown: false}
+                    <KSFilter
+                        :prefix="'triggers'"
+                        :configuration="triggerFilter"
+                        @update-properties="updateDisplayColumns"
+                        :tableOptions="{
+                            chart: {shown: false},
+                            refresh: {shown: true, callback: () => load()}
                         }"
+                        :properties="{
+                            displayColumns,
+                            shown: true,
+                            columns: optionalColumns,
+                            storageKey: storageKey
+                        }"
+                        :defaultScope="false"
+                        :defaultTimeRange="false"
                     />
                 </template>
                 <template #table>
-                    <select-table
+                    <SelectTable
                         :data="triggersMerged"
                         ref="selectTable"
-                        :default-sort="{prop: 'flowId', order: 'ascending'}"
-                        table-layout="auto"
+                        :defaultSort="{prop: 'flowId', order: 'ascending'}"
+                        tableLayout="auto"
                         fixed
                         @sort-change="onSort"
                         @selection-change="onSelectionChange"
                         expandable
-                        :row-class-name="getClasses"
+                        :rowClassName="getClasses"
+                        :no-data-text="$t('no_results.triggers')"
+                        :rowKey="(row: any) => `${row.namespace}-${row.flowId}-${row.triggerId}`"
                     >
                         <template #expand>
                             <el-table-column type="expand">
                                 <template #default="props">
-                                    <LogsWrapper class="m-3" :filters="props.row" v-if="hasLogsContent(props.row)" :charts="false" embed />
+                                    <LogsWrapper
+                                        class="m-3"
+                                        :filters="props.row"
+                                        v-if="hasLogsContent(props.row)"
+                                        :withCharts="false"
+                                        embed
+                                    />
                                 </template>
                             </el-table-column>
                         </template>
                         <template #select-actions>
-                            <bulk-select
-                                :select-all="queryBulkAction"
+                            <BulkSelect
+                                :selectAll="queryBulkAction"
                                 :selections="selection"
                                 :total="total"
                                 @update:select-all="toggleAllSelection"
@@ -62,13 +85,15 @@
                                 <el-button @click="deleteBackfills()">
                                     {{ $t("delete backfills") }}
                                 </el-button>
-                            </bulk-select>
+                                <el-button @click="deleteTriggers()">
+                                    {{ $t("delete triggers") }}
+                                </el-button>
+                            </BulkSelect>
                         </template>
                         <el-table-column
-                            v-if="visibleColumns.triggerId"
                             prop="triggerId"
                             sortable="custom"
-                            :sort-orders="['ascending', 'descending']"
+                            :sortOrders="['ascending', 'descending']"
                             :label="$t('id')"
                         >
                             <template #default="scope">
@@ -77,163 +102,174 @@
                                 </div>
                             </template>
                         </el-table-column>
+
                         <el-table-column
-                            v-if="visibleColumns.flowId"
-                            prop="flowId"
-                            sortable="custom"
-                            :sort-orders="['ascending', 'descending']"
-                            :label="$t('flow')"
+                            v-for="col in visibleColumns"
+                            :key="col.prop"
+                            :prop="col.prop"
+                            :label="col.label"
+                            :sortable="['flowId', 'namespace', 'nextEvaluationDate'].includes(col.prop) ? 'custom' : false"
+                            :sortOrders="['flowId', 'namespace', 'nextEvaluationDate'].includes(col.prop) ? ['ascending', 'descending'] : undefined"
                         >
-                            <template #default="scope">
-                                <router-link
-                                    :to="{name: 'flows/update', params: {namespace: scope.row.namespace, id: scope.row.flowId}}"
+                            <template #header v-if="col.prop === 'lastTriggeredDate'">
+                                <el-tooltip
+                                    :content="$t('last trigger date tooltip')"
+                                    placement="top"
+                                    effect="light"
+                                    popperClass="wide-tooltip"
                                 >
-                                    {{ $filters.invisibleSpace(scope.row.flowId) }}
-                                </router-link>
-                                <markdown-tooltip
-                                    :id="scope.row.namespace + '-' + scope.row.flowId"
-                                    :description="scope.row.description"
-                                    :title="scope.row.namespace + '.' + scope.row.flowId"
-                                />
+                                    <span>{{ col.label }}</span>
+                                </el-tooltip>
                             </template>
-                        </el-table-column>
-                        <el-table-column
-                            v-if="visibleColumns.namespace"
-                            prop="namespace"
-                            sortable="custom"
-                            :sort-orders="['ascending', 'descending']"
-                            :label="$t('namespace')"
-                        >
+                            <template #header v-else-if="col.prop === 'updatedAt'">
+                                <el-tooltip
+                                    :content="$t('context updated date tooltip')"
+                                    placement="top"
+                                    effect="light"
+                                    popperClass="wide-tooltip"
+                                >
+                                    <span>{{ col.label }}</span>
+                                </el-tooltip>
+                            </template>
+                            <template #header v-else-if="col.prop === 'nextExecutionDate'">
+                                <el-tooltip
+                                    :content="$t('next evaluation date tooltip')"
+                                    placement="top"
+                                    effect="light"
+                                    popperClass="wide-tooltip"
+                                >
+                                    <span>{{ col.label }}</span>
+                                </el-tooltip>
+                            </template>
                             <template #default="scope">
-                                {{ $filters.invisibleSpace(scope.row.namespace) }}
+                                <template v-if="col.prop === 'flowId'">
+                                    <router-link
+                                        v-if="scope.row.namespace && scope.row.flowId"
+                                        :to="{name: 'flows/update', params: {namespace: scope.row.namespace, id: scope.row.flowId}}"
+                                    >
+                                        {{ invisibleSpace(scope.row.flowId) }}
+                                    </router-link>
+                                    <span v-else>{{ invisibleSpace(scope.row.flowId) }}</span>
+                                    <MarkdownTooltip
+                                        v-if="scope.row.namespace && scope.row.flowId"
+                                        :id="scope.row.namespace + '-' + scope.row.flowId"
+                                        :description="scope.row.description"
+                                        :title="scope.row.namespace + '.' + scope.row.flowId"
+                                    />
+                                </template>
+                                <template v-else-if="col.prop === 'namespace'">
+                                    {{ invisibleSpace(scope.row.namespace) }}
+                                </template>
+                                <template v-else-if="col.prop === 'workerId'">
+                                    <Id
+                                        :value="scope.row.workerId"
+                                        :shrink="true"
+                                    />
+                                </template>
+                                <template v-else-if="col.prop === 'lastTriggeredDate'">
+                                    <DateAgo :inverted="true" :date="scope.row.lastTriggeredDate" />
+                                </template>
+                                <template v-else-if="col.prop === 'updatedAt'">
+                                    <DateAgo :inverted="true" :date="scope.row.updatedAt" />
+                                </template>
+                                <template v-else-if="col.prop === 'nextEvaluationDate'">
+                                    <DateAgo :inverted="true" :date="scope.row.nextEvaluationDate" />
+                                </template>
                             </template>
                         </el-table-column>
 
-                        <el-table-column v-if="visibleColumns.executionId" :label="$t('current execution')">
-                            <template #default="scope">
-                                <router-link
-                                    v-if="scope.row.executionId"
-                                    :to="{name: 'executions/update', params: {namespace: scope.row.namespace, flowId: scope.row.flowId, id: scope.row.executionId}}"
-                                >
-                                    <id :value="scope.row.executionId" :shrink="true" />
-                                </router-link>
-                            </template>
-                        </el-table-column>
-                        <el-table-column v-if="visibleColumns.workerId" prop="workerId" :label="$t('workerId')">
-                            <template #default="scope">
-                                <id
-                                    :value="scope.row.workerId"
-                                    :shrink="true"
-                                />
-                            </template>
-                        </el-table-column>
-                        <el-table-column v-if="visibleColumns.date" :label="$t('date')">
-                            <template #default="scope">
-                                <date-ago :inverted="true" :date="scope.row.date" />
-                            </template>
-                        </el-table-column>
-                        <el-table-column v-if="visibleColumns.updatedDate" :label="$t('updated date')">
-                            <template #default="scope">
-                                <date-ago :inverted="true" :date="scope.row.updatedDate" />
-                            </template>
-                        </el-table-column>
-                        <el-table-column
-                            v-if="visibleColumns.nextExecutionDate"
-                            prop="nextExecutionDate"
-                            sortable="custom"
-                            :sort-orders="['ascending', 'descending']"
-                            :label="$t('next execution date')"
-                        >
-                            <template #default="scope">
-                                <date-ago :inverted="true" :date="scope.row.nextExecutionDate" />
-                            </template>
-                        </el-table-column>
-                        <el-table-column :label="$t('cron')">
-                            <template #default="scope">
-                                <Cron v-if="scope.row.cron" :cron-expression="scope.row?.cron" />
-                            </template>
-                        </el-table-column>
                         <el-table-column :label="$t('details')">
                             <template #default="scope">
                                 <TriggerAvatar
-                                    :flow="{flowId: scope.row.flowId, namespace: scope.row.namespace, triggers: [scope.row]}"
-                                    :trigger-id="scope.row.id"
+                                    v-if="!scope.row.missingSource"
+                                    :flow="{id: scope.row.flowId, namespace: scope.row.namespace, triggers: [scope.row]}"
+                                    :triggerId="scope.row.id"
                                 />
                             </template>
                         </el-table-column>
-                        <el-table-column v-if="visibleColumns.evaluateRunningDate" :label="$t('evaluation lock date')">
-                            <template #default="scope">
-                                <date-ago :inverted="true" :date="scope.row.evaluateRunningDate" />
-                            </template>
-                        </el-table-column>
+
                         <el-table-column
-                            v-if="user.hasAnyAction(permission.EXECUTION, action.UPDATE)"
-                            column-key="action"
-                            class-name="row-action"
+                            v-if="authStore.user?.hasAnyAction(permission.EXECUTION, action.UPDATE)"
+                            columnKey="action"
+                            className="row-action"
                         >
                             <template #default="scope">
-                                <el-button v-if="scope.row.executionId || scope.row.evaluateRunningDate">
-                                    <kicon
-                                        :tooltip="$t(`unlock trigger.tooltip.${scope.row.executionId ? 'execution' : 'evaluation'}`)"
+                                <div class="action-container">
+                                    <IconButton
+                                        v-if="scope.row.locked"
+                                        :tooltip="$t('unlock trigger.tooltip.evaluation')"
                                         placement="left"
                                         @click="triggerToUnlock = scope.row"
                                     >
-                                        <lock-off />
-                                    </kicon>
-                                </el-button>
-                            </template>
-                        </el-table-column>
-                        <el-table-column
-                            v-if="user.hasAnyAction(permission.EXECUTION, action.UPDATE)"
-                            column-key="restart"
-                            class-name="row-action"
-                        >
-                            <template #default="scope">
-                                <el-button>
-                                    <kicon
-                                        :tooltip="$t(`restart trigger.tooltip`)"
+                                        <LockOff />
+                                    </IconButton>
+                                    <IconButton
+                                        :tooltip="$t('delete trigger')"
                                         placement="left"
-                                        @click="restart(scope.row)"
+                                        @click="confirmDeleteTrigger(scope.row)"
                                     >
-                                        <Restart />
-                                    </kicon>
-                                </el-button>
+                                        <Delete />
+                                    </IconButton>
+                                </div>
+                            </template>
+                        </el-table-column>
+                        <el-table-column :label="$t('backfill')" columnKey="backfill">
+                            <template #default="scope">
+                                <div class="backfillContainer items-center gap-2">
+                                    <span v-if="scope.row.backfill" class="statusIcon">
+                                        <el-tooltip
+                                            v-if="!scope.row.backfill.paused"
+                                            :content="$t('backfill running')"
+                                            effect="light"
+                                        >
+                                            <PlayBox font />
+                                        </el-tooltip>
+                                        <el-tooltip v-else :content="$t('backfill paused')">
+                                            <PauseBox />
+                                        </el-tooltip>
+                                    </span>
+
+                                    <el-button
+                                        :icon="CalendarCollapseHorizontalOutline"
+                                        v-if="authStore.user?.hasAnyAction(permission.EXECUTION, action.UPDATE)"
+                                        @click="setBackfillModal(scope.row, true)"
+                                        size="small"
+                                        type="primary"
+                                        :disabled="scope.row.disabled || scope.row.codeDisabled"
+                                    >
+                                        {{ $t("backfill executions") }}
+                                    </el-button>
+                                </div>
                             </template>
                         </el-table-column>
 
-                        <el-table-column :label="$t('backfill')" column-key="backfill">
-                            <template #default="scope">
-                                <span v-if="scope.row.backfill">
-                                    <el-tooltip v-if="!scope.row.backfill.paused" :content="$t('backfill running')" effect="light">
-                                        <play-box />
-                                    </el-tooltip>
-                                    <el-tooltip v-else :content="$t('backfill paused')">
-                                        <pause-box />
-                                    </el-tooltip>
-                                </span>
-                            </template>
-                        </el-table-column>
 
-                        <el-table-column :label="$t('actions')" column-key="disable" class-name="row-action">
+                        <el-table-column :label="$t('enabled')" columnKey="disable" className="row-action">
                             <template #default="scope">
-                                <el-switch
+                                <el-tooltip
                                     v-if="!scope.row.missingSource"
-                                    :active-text="$t('enabled')"
-                                    :model-value="!scope.row.disabled"
-                                    @change="setDisabled(scope.row, $event)"
-                                    class="switch-text"
-                                    :active-action-icon="Check"
-                                />
-                                <el-tooltip v-else :content="'flow source not found'" effect="light">
-                                    <AlertCircle class="trigger-issue-icon" />
+                                    :content="$t('trigger disabled')"
+                                    :disabled="!scope.row.codeDisabled"
+                                    effect="light"
+                                >
+                                    <el-switch
+                                        :modelValue="!(scope.row.disabled || scope.row.codeDisabled)"
+                                        @change="setDisabled(scope.row, $event)"
+                                        inlinePrompt
+                                        class="switch-text"
+                                        :disabled="scope.row.codeDisabled"
+                                    />
+                                </el-tooltip>
+                                <el-tooltip v-else :content="$t('flow source not found')" effect="light">
+                                    <AlertCircle />
                                 </el-tooltip>
                             </template>
                         </el-table-column>
-                    </select-table>
+                    </SelectTable>
                 </template>
-            </data-table>
+            </DataTable>
 
-            <el-dialog v-model="triggerToUnlock" destroy-on-close :append-to-body="true">
+            <el-dialog v-model="triggerToUnlock" destroyOnClose :appendToBody="true">
                 <template #header>
                     <span v-html="$t('unlock trigger.confirmation')" />
                 </template>
@@ -244,277 +280,636 @@
                     </el-button>
                 </template>
             </el-dialog>
+
+            <el-dialog v-model="isBackfillOpen" destroyOnClose :appendToBody="true">
+                <template #header>
+                    <span v-html="$t('backfill executions')" />
+                </template>
+                <el-form :model="backfill" labelPosition="top">
+                    <div class="pickers">
+                        <div class="small-picker">
+                            <el-form-item label="Start">
+                                <el-date-picker
+                                    v-model="backfill.start"
+                                    type="datetime"
+                                    placeholder="Start"
+                                    :disabledDate="disabledStartDate"
+                                />
+                            </el-form-item>
+                        </div>
+                        <div class="small-picker">
+                            <el-form-item label="End">
+                                <el-date-picker
+                                    v-model="backfill.end"
+                                    type="datetime"
+                                    placeholder="End"
+                                    :disabledDate="disabledEndDate"
+                                />
+                            </el-form-item>
+                        </div>
+                    </div>
+                </el-form>
+                <FlowRun
+                    @update-inputs="backfill.inputs = $event"
+                    @update-labels="backfill.labels = $event"
+                    :selectedTrigger="selectedTrigger"
+                    :redirect="false"
+                    :embed="true"
+                />
+                <template #footer>
+                    <el-button
+                        type="primary"
+                        @click="postBackfill()"
+                        :disabled="checkBackfill"
+                    >
+                        {{ $t("execute backfill") }}
+                    </el-button>
+                </template>
+            </el-dialog>
         </div>
     </section>
 </template>
-<script setup>
+<script setup lang="ts">
+    import _merge from "lodash/merge";
+    import {ref, computed, watch} from "vue";
+    import moment from "moment";
+    import {useI18n} from "vue-i18n";
+    import {useRoute} from "vue-router";
+    import {ElMessage} from "element-plus";
+    import {useToast} from "../../utils/toast";
+    import {useFlowStore} from "../../stores/flow";
+    import {useAuthStore} from "override/stores/auth";
+    import {invisibleSpace} from "../../utils/filters";
+    import {storageKeys} from "../../utils/constants";
+    import {TriggerDeleteOptions, useTriggerStore} from "../../stores/trigger";
+    import {useExecutionsStore} from "../../stores/executions";
+    import {useTriggerFilter} from "../filter/configurations";
+    import {useDataTableActions} from "../../composables/useDataTableActions";
+    import {useSelectTableActions} from "../../composables/useSelectTableActions";
+    import {type ColumnConfig, useTableColumns} from "../../composables/useTableColumns";
+
+    import action from "../../models/action";
+    import permission from "../../models/permission";
     import LockOff from "vue-material-design-icons/LockOff.vue";
     import PlayBox from "vue-material-design-icons/PlayBox.vue";
     import PauseBox from "vue-material-design-icons/PauseBox.vue";
-    import Kicon from "../Kicon.vue";
-    import permission from "../../models/permission";
-    import action from "../../models/action";
-    import TopNavBar from "../layout/TopNavBar.vue";
-    import Check from "vue-material-design-icons/Check.vue";
     import AlertCircle from "vue-material-design-icons/AlertCircle.vue";
-    import SelectTable from "../layout/SelectTable.vue";
-    import BulkSelect from "../layout/BulkSelect.vue";
-    import Restart from "vue-material-design-icons/Restart.vue";
-    import Cron from "../layout/Cron.vue"
-    import TriggerAvatar from "../flows/TriggerAvatar.vue"
-</script>
-<script>
-    import RouteContext from "../../mixins/routeContext";
-    import RestoreUrl from "../../mixins/restoreUrl";
-    import DataTable from "../layout/DataTable.vue";
-    import DataTableActions from "../../mixins/dataTableActions";
-    import MarkdownTooltip from "../layout/MarkdownTooltip.vue";
-    import DateAgo from "../layout/DateAgo.vue";
+    import CalendarCollapseHorizontalOutline from "vue-material-design-icons/CalendarCollapseHorizontalOutline.vue";
+    import Delete from "vue-material-design-icons/Delete.vue";
+    import Download from "vue-material-design-icons/Download.vue";
+
     import Id from "../Id.vue";
-    import {mapState} from "vuex";
-    import SelectTableActions from "../../mixins/selectTableActions";
-    import _merge from "lodash/merge";
+    import IconButton from "../IconButton.vue";
+    //@ts-expect-error No declaration file
+    import FlowRun from "../flows/FlowRun.vue";
+    import DateAgo from "../layout/DateAgo.vue";
+    import DataTable from "../layout/DataTable.vue";
+    import TopNavBar from "../layout/TopNavBar.vue";
+    import BulkSelect from "../layout/BulkSelect.vue";
     import LogsWrapper from "../logs/LogsWrapper.vue";
-    import KestraFilter from "../filter/KestraFilter.vue"
+    import SelectTable from "../layout/SelectTable.vue";
+    import TriggerAvatar from "../flows/TriggerAvatar.vue";
+    import KSFilter from "../filter/components/KSFilter.vue";
+    import MarkdownTooltip from "../layout/MarkdownTooltip.vue";
+    import useRouteContext from "../../composables/useRouteContext";
 
-    export default {
-        mixins: [RouteContext, RestoreUrl, DataTableActions, SelectTableActions],
-        components: {
-            KestraFilter,
-            MarkdownTooltip,
-            DataTable,
-            DateAgo,
-            Id,
-            LogsWrapper
+    const triggerFilter = useTriggerFilter();
+
+
+    const route = useRoute();
+    const toast = useToast();
+    const {t} = useI18n({useScope: "global"});
+
+    const authStore = useAuthStore();
+    const flowStore = useFlowStore();
+    const triggerStore = useTriggerStore();
+    const executionsStore = useExecutionsStore();
+
+    const dataTable = ref();
+    const selectTable = ref();
+
+    const total = ref();
+    const triggers = ref<any[]>([]);
+    const triggerToUnlock = ref();
+    const isBackfillOpen = ref(false);
+    const selectedTrigger = ref(null);
+    const backfill = ref<{
+        start: Date | null;
+        end: Date | null;
+        inputs: any;
+        labels: any[];
+    }>({
+        start: null,
+        end: null,
+        inputs: null,
+        labels: []
+    });
+
+    const optionalColumns = computed(() => [
+        {
+            label: t("flow"),
+            prop: "flowId",
+            default: true,
+            description: t("filter.table_column.triggers.flow")
         },
-        data() {
-            return {
-                triggers: undefined,
-                total: undefined,
-                triggerToUnlock: undefined,
-                state: undefined,
-                states: [
-                    {label: this.$t("triggers_state.options.enabled"), value: "ENABLED"},
-                    {label: this.$t("triggers_state.options.disabled"), value: "DISABLED"}
-                ],
-                selection: null
-            };
+        {
+            label: t("namespace"),
+            prop: "namespace",
+            default: true,
+            description: t("filter.table_column.triggers.namespace")
         },
-        methods: {
-            hasLogsContent(row) {
-                return row.logs && row.logs.length > 0;
-            },
-            getClasses(row) {
-                return this.hasLogsContent(row) ? "expandable" : "no-expand"; // Return class based on logs
-            },
-            onSelectionChange(selection) {
-                this.selection = selection;
-            },
-            loadData(callback) {
-                this.$store.dispatch("trigger/search", {
-                    namespace: this.$route.query.namespace,
-                    q: this.$route.query.q,
-                    size: parseInt(this.$route.query.size || 25),
-                    page: parseInt(this.$route.query.page || 1),
-                    sort: this.$route.query.sort || "triggerId:asc"
-                }).then(triggersData => {
-                    this.triggers = triggersData.results;
-                    this.total = triggersData.total;
-                    if (callback) {
-                        callback();
-                    }
-                });
-            },
-            async unlock() {
-                const namespace = this.triggerToUnlock.namespace;
-                const flowId = this.triggerToUnlock.flowId;
-                const triggerId = this.triggerToUnlock.triggerId;
-                const unlockedTrigger = await this.$store.dispatch("trigger/unlock", {
-                    namespace: namespace,
-                    flowId: flowId,
-                    triggerId: triggerId
-                });
-
-                this.$message({
-                    message: this.$t("unlock trigger.success"),
-                    type: "success"
-                });
-
-                const triggerIdx = this.triggers.findIndex(trigger => trigger.namespace === namespace && trigger.flowId === flowId && trigger.triggerId === triggerId);
-                if (triggerIdx !== -1) {
-                    this.triggers[triggerIdx] = unlockedTrigger;
-                }
-
-                this.triggerToUnlock = undefined;
-            },
-            restart(trigger) {
-                this.$store.dispatch("trigger/restart", {
-                    namespace: trigger.namespace,
-                    flowId: trigger.flowId,
-                    triggerId: trigger.triggerId
-                }).then(newTrigger => {
-                    this.$toast().saved(newTrigger.id);
-                    this.triggers = this.triggers.map(t => {
-                        if (t.id === newTrigger.id) {
-                            return newTrigger
-                        }
-                        return t
-                    })
-                })
-            },
-            setDisabled(trigger, value) {
-                if (trigger.codeDisabled) {
-                    this.$message({
-                        message: this.$t("triggerflow disabled"),
-                        type: "error",
-                        showClose: true,
-                        duration: 1500
-                    });
-                    return;
-                }
-                this.$store.dispatch("trigger/update", {...trigger, disabled: !value})
-                    .then(_ => {
-                        this.loadData();
-                    })
-            },
-            genericConfirmAction(toast, queryAction, byIdAction, success, data) {
-                this.$toast().confirm(
-                    this.$t(toast, {"count": this.queryBulkAction ? this.total : this.selection.length}),
-                    () => this.genericConfirmCallback(queryAction, byIdAction, success, data),
-                    () => {
-                    }
-                );
-            },
-            genericConfirmCallback(queryAction, byIdAction, success, data) {
-                if (this.queryBulkAction) {
-                    const query = this.loadQuery({});
-                    const options = {...query, ...data};
-                    return this.$store
-                        .dispatch(queryAction, options)
-                        .then(data => {
-                            this.$toast().success(this.$t(success, {count: data.count}));
-                            this.loadData()
-                        })
-                } else {
-                    const selection = this.selection;
-                    const options = {triggers: selection, ...data};
-                    return this.$store
-                        .dispatch(byIdAction, byIdAction.includes("setDisabled") ? options : selection)
-                        .then(data => {
-                            this.$toast().success(this.$t(success, {count: data.count}));
-                            this.loadData()
-                        }).catch(e => {
-                            this.$toast().error(e?.invalids.map(exec => {
-                                return {message: this.$t(exec.message, {triggers: exec.invalidValue})}
-                            }), this.$t(e.message))
-                        })
-                }
-            },
-            unpauseBackfills() {
-                this.genericConfirmAction(
-                    "bulk unpause backfills",
-                    "trigger/unpauseBackfillByQuery",
-                    "trigger/unpauseBackfillByTriggers",
-                    "bulk success unpause backfills"
-                );
-            },
-            pauseBackfills() {
-                this.genericConfirmAction(
-                    "bulk pause backfills",
-                    "trigger/pauseBackfillByQuery",
-                    "trigger/pauseBackfillByTriggers",
-                    "bulk success pause backfills"
-                );
-            },
-            deleteBackfills() {
-                this.genericConfirmAction(
-                    "bulk delete backfills",
-                    "trigger/deleteBackfillByQuery",
-                    "trigger/deleteBackfillByTriggers",
-                    "bulk success delete backfills"
-                );
-            },
-            unlockTriggers() {
-                this.genericConfirmAction(
-                    "bulk unlock",
-                    "trigger/unlockByQuery",
-                    "trigger/unlockByTriggers",
-                    "bulk success unlock"
-                );
-            },
-            setDisabledTriggers(bool) {
-                this.genericConfirmAction(
-                    `bulk disabled status.${bool}`,
-                    "trigger/setDisabledByQuery",
-                    "trigger/setDisabledByTriggers",
-                    `bulk success disabled status.${bool}`,
-                    {disabled: bool}
-                );
-            },
-            loadQuery(base) {
-                let queryFilter = this.queryWithFilter();
-
-                return _merge(base, queryFilter)
-            },
+        {
+            label: t("workerId"),
+            prop: "workerId",
+            default: false,
+            description: t("filter.table_column.triggers.workerId")
         },
-        computed: {
-            ...mapState("auth", ["user"]),
-            routeInfo() {
-                return {
-                    title: this.$t("triggers")
-                }
-            },
-            triggersMerged() {
-                const all = this.triggers.map(triggers => {
-                    return {
-                        ...triggers?.abstractTrigger,
-                        ...triggers.triggerContext,
-                        codeDisabled: triggers?.abstractTrigger?.disabled,
-                        // if we have no abstract trigger, it means that flow or trigger definition hasn't been found
-                        missingSource: !triggers.abstractTrigger
-                    }
-                })
+        {
+            label: t("last trigger date"),
+            prop: "lastTriggeredDate",
+            default: true,
+            description: t("filter.table_column.triggers.last trigger date")
+        },
+        {
+            label: t("state updated date"),
+            prop: "updatedAt",
+            default: false,
+            description: t("filter.table_column.triggers.context updated date")
+        },
+        {
+            label: t("next evaluation date"),
+            prop: "nextEvaluationDate",
+            default: false,
+            description: t("filter.table_column.triggers.next evaluation date")
+        }
+    ]);
 
-                if(!this.$route.query.trigger_state?.length) return all;
+    const storageKey = storageKeys.DISPLAY_TRIGGERS_COLUMNS;
 
-                const disabled = this.$route.query?.trigger_state?.[0] === "DISABLED" ? true : false;
-                return all.filter(trigger => trigger.disabled === disabled);
-            },
-            visibleColumns() {
-                const columns = [
-                    {prop: "triggerId", label: this.$t("id")},
-                    {prop: "flowId", label: this.$t("flow")},
-                    {prop: "namespace", label: this.$t("namespace")},
-                    {prop: "executionId", label: this.$t("current execution")},
-                    {prop: "executionCurrentState", label: this.$t("state")},
-                    {prop: "workerId", label: this.$t("workerId")},
-                    {prop: "date", label: this.$t("date")},
-                    {prop: "updatedDate", label: this.$t("updated date")},
-                    {prop: "nextExecutionDate", label: this.$t("next execution date")},
-                    {prop: "evaluateRunningDate", label: this.$t("evaluation lock date")},
-                ];
+    const {visibleColumns: displayColumns, updateVisibleColumns} = useTableColumns({
+        columns: optionalColumns.value,
+        storageKey,
+        initialVisibleColumns: optionalColumns.value.filter(col => col.default).map(col => col.prop)
+    });
 
-                return columns.reduce((acc, column) => {
-                    acc[column.prop] = this.triggersMerged.some(trigger => trigger[column.prop]);
-                    return acc;
-                }, {});
+    const visibleColumns = computed(() =>
+        displayColumns.value
+            .map(prop => optionalColumns.value.find(c => c.prop === prop))
+            .filter(Boolean) as ColumnConfig[]
+    );
+
+    const loadData = (callback?: () => void) => {
+        const query = loadQuery({
+            size: parseInt(String(route.query?.size ?? "25")),
+            page: parseInt(String(route.query?.page ?? "1")),
+            sort: String(route.query?.sort ?? "triggerId:asc")
+        });
+
+        const previousSelection = selection.value;
+        triggerStore.search(query).then(async triggersData => {
+            triggers.value = triggersData?.results;
+            total.value = triggersData?.total;
+
+            if (previousSelection && selectTable.value) {
+                await selectTable.value.waitTableRender();
+                selectTable.value.setSelection(previousSelection);
             }
+
+            if (callback) {
+                callback();
+            }
+        });
+    };
+
+    const {ready, onSort, onPageChanged, queryWithFilter, load} = useDataTableActions({
+        dataTableRef: dataTable,
+        loadData
+    });
+
+    const {
+        queryBulkAction,
+        selection,
+        handleSelectionChange,
+        toggleAllUnselected,
+        toggleAllSelection
+    } = useSelectTableActions({
+        dataTableRef: selectTable
+    });
+
+    const routeInfo = computed(() => ({
+        title: t("triggers")
+    }));
+
+    useRouteContext(routeInfo);
+
+    const updateDisplayColumns = (newColumns: string[]) => {
+        updateVisibleColumns(newColumns);
+    };
+
+    const onSelectionChange = handleSelectionChange;
+
+    const setBackfillModal = (trigger: any, bool: boolean) => {
+        if (!trigger) {
+            isBackfillOpen.value = false;
+            selectedTrigger.value = null;
+            return;
+        }
+
+        executionsStore.loadFlowForExecution({
+            namespace: trigger.namespace,
+            flowId: trigger.flowId,
+            store: true
+        }).then(() => {
+            isBackfillOpen.value = bool;
+            selectedTrigger.value = trigger;
+        });
+    };
+
+    const cleanBackfill = computed(() => {
+        const labels = backfill.value.labels?.filter((label: any) => label.key && label.value);
+        return {...backfill.value, labels: labels?.length ? labels : null};
+    });
+
+    const postBackfill = () => {
+        const trigger = selectedTrigger.value as any;
+        triggerStore.createBackfill({
+            namespace: trigger.namespace,
+            flowId: trigger.flowId,
+            triggerId: trigger.triggerId,
+            backfill: cleanBackfill.value
+        })
+            .then(() => {
+                toast.saved(trigger?.triggerId);
+                setBackfillModal(null, false);
+                backfill.value = {
+                    start: null,
+                    end: null,
+                    inputs: null,
+                    labels: []
+                };
+                triggerLoadDataAfterBulkEditAction();
+            });
+    };
+
+    const hasLogsContent = (row: any) => {
+        return row.logs && row.logs.length > 0;
+    };
+
+    const getClasses = (row: any) => {
+        return hasLogsContent(row) ? "expandable" : "no-expand";
+    };
+
+    const disabledStartDate = (time: Date) => {
+        return new Date() < time || (backfill.value.end && time > backfill.value.end);
+    };
+
+    const disabledEndDate = (time: Date) => {
+        return new Date() < time || (backfill.value.start && backfill.value.start > time);
+    };
+
+    const triggerLoadDataAfterBulkEditAction = () => {
+        loadData();
+        setTimeout(() => loadData(), 200);
+        setTimeout(() => loadData(), 1000);
+        setTimeout(() => loadData(), 5000);
+    };
+
+    const unlock = async () => {
+        const namespace = triggerToUnlock.value?.namespace;
+        const flowId = triggerToUnlock.value?.flowId;
+        const triggerId = triggerToUnlock.value?.triggerId;
+        const unlockedTrigger = await triggerStore.unlock({
+            namespace: namespace,
+            flowId: flowId,
+            triggerId: triggerId
+        });
+
+        ElMessage({
+            message: t("unlock trigger.success"),
+            type: "success"
+        });
+
+        const triggerIdx = triggers.value?.findIndex((trigger: any) => trigger.namespace === namespace && trigger.flowId === flowId && trigger.triggerId === triggerId);
+        if (triggerIdx !== -1) {
+            triggers.value[triggerIdx] = unlockedTrigger;
+        }
+
+        triggerToUnlock.value = undefined;
+    };
+
+    const setDisabled = (trigger: any, value: boolean) => {
+        if (trigger.codeDisabled) {
+            ElMessage({
+                message: t("triggerflow disabled"),
+                type: "error",
+                showClose: true,
+                duration: 1500
+            });
+            return;
+        }
+        triggerStore.setDisabled({...trigger, disabled: !value})
+            .then((updatedTrigger: any) => {
+                toast.saved(updatedTrigger.triggerId);
+                triggers.value = triggers.value?.map((t: any) => {
+                    const triggerContextMatches = t.triggerContext &&
+                        t.triggerContext.flowId === updatedTrigger.flowId &&
+                        t.triggerContext.triggerId === updatedTrigger.triggerId;
+
+                    if (triggerContextMatches) {
+                        return {triggerContext: updatedTrigger, abstractTrigger: t.abstractTrigger};
+                    }
+                    return t;
+                });
+            });
+    };
+
+    const confirmDeleteTrigger = (trigger: TriggerDeleteOptions) => {
+        toast.confirm(
+            t("delete trigger confirmation", {id: trigger.id}),
+            () => triggerStore.delete({
+                namespace: trigger.namespace,
+                flowId: trigger.flowId,
+                triggerId: trigger.triggerId
+            }).then(() => {
+                toast.success(t("delete trigger success", {id: trigger.id}));
+                loadData();
+            }).catch(error => {
+                toast.error(t("delete trigger error", {id: trigger.id}));
+                console.error(error);
+            }),
+            "warning"
+        );
+    };
+
+    const deleteTriggers = () => {
+        genericConfirmAction(
+            "bulk delete triggers",
+            "deleteByQuery",
+            "deleteByTriggers",
+            "bulk success delete triggers",
+            null,
+            "WARNING: deleting triggers may lead to duplicate executions if the triggers are still active in flows"
+        );
+    };
+
+    const genericConfirmAction = (toastKey: string, queryAction: string, byIdAction: string, success: string, data?: any, extraWarning?: string) => {
+        let message = t(toastKey, {"count": queryBulkAction.value ? total.value : selection.value?.length}) + ". " + t("bulk action async warning");
+
+        if (extraWarning) {
+            message += "<br><br><strong>" + extraWarning + "</strong>";
+        }
+
+        toast.confirm(
+            message,
+            () => genericConfirmCallback(queryAction, byIdAction, success, data)
+        );
+    };
+
+    const genericConfirmCallback = (queryAction: string, byIdAction: string, success: string, data?: any) => {
+        const actionMap: Record<string, () => any> = {
+            "unpauseBackfillByQuery": () => triggerStore.unpauseBackfillByQuery,
+            "unpauseBackfillByTriggers": () => triggerStore.unpauseBackfillByTriggers,
+            "pauseBackfillByQuery": () => triggerStore.pauseBackfillByQuery,
+            "pauseBackfillByTriggers": () => triggerStore.pauseBackfillByTriggers,
+            "deleteBackfillByQuery": () => triggerStore.deleteBackfillByQuery,
+            "deleteBackfillByTriggers": () => triggerStore.deleteBackfillByTriggers,
+            "unlockByQuery": () => triggerStore.unlockByQuery,
+            "unlockByTriggers": () => triggerStore.unlockByTriggers,
+            "setDisabledByQuery": () => triggerStore.setDisabledByQuery,
+            "setDisabledByTriggers": () => triggerStore.setDisabledByTriggers,
+            "deleteByQuery": () => triggerStore.deleteByQuery,
+            "deleteByTriggers": () => triggerStore.deleteByTriggers,
+        };
+
+        if (queryBulkAction.value) {
+            const query = loadQuery({});
+            const options = {...query, ...data};
+            const actions = actionMap[queryAction]();
+            return actions(options)
+                .then((data: any) => {
+                    toast.success(t(success, {count: data?.count}));
+                    toggleAllUnselected();
+                    triggerLoadDataAfterBulkEditAction();
+                });
+        } else {
+            const selectionData = selection.value;
+            const options = {triggers: selectionData, ...data};
+            const actions = actionMap[byIdAction]();
+            return actions(byIdAction.includes("setDisabled") ? options : selectionData)
+                .then((data: any) => {
+                    toast.success(t(success, {count: data?.count}));
+                    toggleAllUnselected();
+                    triggerLoadDataAfterBulkEditAction();
+                }).catch((e: any) => {
+                    toast.error(e?.invalids?.map((exec: any) => {
+                        return {message: t(exec?.message, {triggers: exec?.invalidValue})}
+                    }), t(e?.message));
+                });
         }
     };
+
+    const unpauseBackfills = () => {
+        genericConfirmAction(
+            "bulk unpause backfills",
+            "unpauseBackfillByQuery",
+            "unpauseBackfillByTriggers",
+            "bulk success unpause backfills"
+        );
+    };
+
+    const pauseBackfills = () => {
+        genericConfirmAction(
+            "bulk pause backfills",
+            "pauseBackfillByQuery",
+            "pauseBackfillByTriggers",
+            "bulk success pause backfills"
+        );
+    };
+
+    const deleteBackfills = () => {
+        genericConfirmAction(
+            "bulk delete backfills",
+            "deleteBackfillByQuery",
+            "deleteBackfillByTriggers",
+            "bulk success delete backfills"
+        );
+    };
+
+    const unlockTriggers = () => {
+        genericConfirmAction(
+            "bulk unlock",
+            "unlockByQuery",
+            "unlockByTriggers",
+            "bulk success unlock"
+        );
+    };
+
+    const setDisabledTriggers = (bool: boolean) => {
+        genericConfirmAction(
+            `bulk disabled status.${bool}`,
+            "setDisabledByQuery",
+            "setDisabledByTriggers",
+            `bulk success disabled status.${bool}`,
+            {disabled: bool}
+        );
+    };
+
+    const loadQuery = (base: any) => {
+        const queryFilter = queryWithFilter();
+
+        const timeRange = queryFilter["filters[timeRange][EQUALS]"];
+        if (timeRange) {
+            const end = new Date();
+            const start = new Date(end.getTime() - moment.duration(timeRange).asMilliseconds());
+            queryFilter["filters[startDate][GREATER_THAN_OR_EQUAL_TO]"] = start.toISOString();
+            queryFilter["filters[endDate][LESS_THAN_OR_EQUAL_TO]"] = end.toISOString();
+            delete queryFilter["filters[timeRange][EQUALS]"];
+        }
+
+        return _merge(base, queryFilter);
+    };
+
+    const checkBackfill = computed(() => {
+        if (!backfill.value?.start) {
+            return true;
+        }
+        if (backfill.value?.end && backfill.value.start > backfill.value.end) {
+            return true;
+        }
+        if (flowStore.flow?.inputs) {
+            const requiredInputs = flowStore.flow.inputs?.map((input: any) => input?.required !== false ? input?.id : null).filter((i: any) => i !== null) || [];
+
+            if (requiredInputs.length > 0) {
+                if (!backfill.value?.inputs) {
+                    return true;
+                }
+                const fillInputs = Object.keys(backfill.value.inputs).filter((i: string) => backfill.value?.inputs?.[i] !== null && backfill.value?.inputs?.[i] !== undefined);
+                if (requiredInputs.sort().join(",") !== fillInputs.sort().join(",")) {
+                    return true;
+                }
+            }
+        }
+        if (backfill.value?.labels?.length > 0) {
+            for (let label of backfill.value.labels) {
+                if (((label as any)?.key && !(label as any)?.value) || (!(label as any)?.key && (label as any)?.value)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    });
+
+    const triggersMerged = computed(() => {
+        const all = triggers.value?.map((t: any) => {
+            return {
+                ...t?.trigger,
+                ...t?.state,
+                codeDisabled: t?.trigger?.disabled,
+                missingSource: !t?.trigger
+            };
+        }) ?? [];
+
+        return all;
+    });
+
+    watch(ready, (newReady: any) => {
+        if (newReady) {
+            loadData(load);
+        }
+    });
+
+    async function exportTriggersAsStream() {
+        await triggerStore.exportTriggersAsCSV(route.query);
+    }
 </script>
-<style>
+
+<style scoped lang="scss">
+    .data-table-wrapper {
+        margin-left: 0 !important;
+        padding-left: 0 !important;
+    }
+
+    .backfillContainer {
+        display: flex;
+        align-items: center;
+    }
+
+    .action-container {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+    }
+
+    .statusIcon {
+        font-size: large;
+    }
+
     .trigger-issue-icon {
         color: var(--ks-content-warning);
         font-size: 1.4em;
     }
-    .el-table__expanded-cell[class*=cell]{
-        padding: 0;
-    }
-    .no-expand .el-icon {
-        display: none; /* Hide the expand icon */
+
+    .alert-circle-icon {
+        color: var(--ks-content-warning);
+        font-size: 1.4em;
     }
 
-    .no-expand .el-table__expand-icon {
-        pointer-events: none; /* Disable pointer events */
+    :deep(.el-table__expand-icon) {
+        pointer-events: none;
+
+        .el-icon {
+            display: none;
+        }
+    }
+
+    :deep(.el-switch) {
+        .is-text {
+            padding: 0 3px;
+            color: inherit;
+        }
+
+        &.is-checked {
+            .is-text {
+                color: #ffffff;
+            }
+        }
+    }
+
+    .el-table {
+        a {
+            color: var(--ks-content-link);
+        }
+    }
+
+    .wide-tooltip {
+        max-width: 400px;
+        white-space: normal;
+        word-break: break-word;
+        color: var(--ks-content-primary) !important;
+    }
+
+    :deep(.el-collapse) {
+        border-radius: var(--bs-border-radius-lg);
+        border: 1px solid var(--ks-border-primary);
+        background: var(--bs-gray-100);
+
+        .el-collapse-item__header {
+            background: transparent;
+            border-bottom: 1px solid var(--ks-border-primary);
+            font-size: var(--bs-font-size-sm);
+        }
+
+        .el-collapse-item__content {
+            background: var(--bs-gray-100);
+            border-bottom: 1px solid var(--ks-border-primary);
+        }
+
+        .el-collapse-item__header,
+        .el-collapse-item__content {
+            &:last-child {
+                border-bottom-left-radius: var(--bs-border-radius-lg);
+                border-bottom-right-radius: var(--bs-border-radius-lg);
+            }
+        }
     }
 </style>

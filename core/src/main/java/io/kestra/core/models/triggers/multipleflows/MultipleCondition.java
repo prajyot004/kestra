@@ -1,16 +1,17 @@
 package io.kestra.core.models.triggers.multipleflows;
 
-import io.kestra.core.exceptions.InternalException;
-import io.kestra.core.models.conditions.Condition;
-import io.kestra.core.models.conditions.ConditionContext;
-import io.kestra.core.models.executions.Execution;
-import io.kestra.core.models.triggers.TimeWindow;
-import io.kestra.core.utils.Rethrow;
-import org.slf4j.Logger;
-
 import java.util.*;
 import java.util.stream.Collectors;
 
+import org.slf4j.Logger;
+
+import io.kestra.core.exceptions.InternalException;
+import io.kestra.core.models.conditions.Condition;
+import io.kestra.core.models.conditions.ConditionContext;
+import io.kestra.core.models.triggers.TimeWindow;
+import io.kestra.core.utils.Rethrow;
+// FIXME check if we keep it or not, maybe refactor the whole multiple flow handling and simplify it.
+//  At least, if we keep it, we should make it sealed so it's not implemented wildly.
 public interface MultipleCondition extends Rethrow.PredicateChecked<ConditionContext, InternalException> {
     String getId();
 
@@ -22,14 +23,18 @@ public interface MultipleCondition extends Rethrow.PredicateChecked<ConditionCon
 
     Logger logger();
 
+    Mode getMode();
+
+    Integer getMinSatisfied();
+
     /**
      * This conditions will only validate previously calculated value on
-     * {@link io.kestra.core.services.FlowTriggerService#computeExecutionsFromFlowTriggers(Execution, List, Optional)}} and {@link MultipleConditionStorageInterface#save(List)} by the executor.
+     * io.kestra.executor.FlowTriggerService#computeExecutionsFromFlowTriggers(Execution, List, Optional) and {@link MultipleConditionStateStore#save(List)} by the executor.
      * The real validation is done here.
      */
     @Override
     default boolean test(ConditionContext conditionContext) throws InternalException {
-        MultipleConditionStorageInterface multipleConditionStorage = conditionContext.getMultipleConditionStorage();
+        MultipleConditionStateStore multipleConditionStorage = conditionContext.getMultipleConditionStorage();
         Objects.requireNonNull(multipleConditionStorage);
 
         Optional<MultipleConditionWindow> triggerExecutionWindow = multipleConditionStorage.get(conditionContext.getFlow(), this.getId());
@@ -37,14 +42,15 @@ public interface MultipleCondition extends Rethrow.PredicateChecked<ConditionCon
         Map<String, Boolean> results = getConditions()
             .keySet()
             .stream()
-            .map(condition -> new AbstractMap.SimpleEntry<>(
-                condition,
-                (triggerExecutionWindow.isPresent() &&
-                    triggerExecutionWindow.get().getResults() != null &&
-                    triggerExecutionWindow.get().getResults().containsKey(condition) &&
-                    triggerExecutionWindow.get().getResults().get(condition)
+            .map(
+                condition -> new AbstractMap.SimpleEntry<>(
+                    condition,
+                    (triggerExecutionWindow.isPresent() &&
+                        triggerExecutionWindow.get().getResults() != null &&
+                        triggerExecutionWindow.get().getResults().containsKey(condition) &&
+                        triggerExecutionWindow.get().getResults().get(condition))
                 )
-            ))
+            )
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
         long validatedCount = results
@@ -53,7 +59,11 @@ public interface MultipleCondition extends Rethrow.PredicateChecked<ConditionCon
             .filter(Map.Entry::getValue)
             .count();
 
-        boolean result = getConditions().size() == validatedCount;
+        boolean result = switch(getMode()) {
+            case Mode.ALL -> getConditions().size() == validatedCount;
+            case Mode.ANY -> validatedCount > 0;
+            case Mode.AT_LEAST -> validatedCount >= getMinSatisfied();
+        };
 
         Logger log = logger();
         if (result && log.isDebugEnabled()) {
@@ -74,5 +84,9 @@ public interface MultipleCondition extends Rethrow.PredicateChecked<ConditionCon
         }
 
         return result;
+    }
+
+    enum Mode {
+        ALL, ANY, AT_LEAST
     }
 }

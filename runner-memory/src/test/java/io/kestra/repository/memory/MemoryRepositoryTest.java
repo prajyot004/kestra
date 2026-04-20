@@ -1,40 +1,38 @@
 package io.kestra.repository.memory;
 
-import io.kestra.core.models.flows.Flow;
-import io.kestra.core.repositories.FlowRepositoryInterface;
-import io.kestra.core.serializers.YamlParser;
-import io.kestra.core.junit.annotations.KestraTest;
-import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.models.flows.GenericFlow;
+import io.kestra.core.repositories.FlowRepositoryInterface;
+
+import jakarta.inject.Inject;
+
+import static io.kestra.core.tenant.TenantService.MAIN_TENANT;
+import static org.assertj.core.api.Assertions.assertThat;
 
 @KestraTest
 public class MemoryRepositoryTest {
-
-    @Inject
-    private YamlParser yamlParser;
 
     @Inject
     private FlowRepositoryInterface flowRepositoryInterface;
 
     @Test
     void verifyMemoryFallbacksToH2() {
-        assertThat(flowRepositoryInterface.findAll(null).size(), is(0));
+        assertThat(flowRepositoryInterface.findAll(null).size()).isZero();
 
         String flowSource = """
-            id: some-flow
-            namespace: some.namespace
-            tasks:
-              - id: some-task
-                type: io.kestra.core.tasks.debugs.Return
-                format: "Hello, World!\"""";
-        Flow flow = yamlParser.parse(flowSource, Flow.class);
-        flowRepositoryInterface.create(flow, flowSource, flow);
+               id: some-flow
+               namespace: some.namespace
+               tasks:
+                 - id: some-task
+                   type: io.kestra.plugin.core.debug.Return
+                   format: "Hello, World!"
+            """;
+        flowRepositoryInterface.create(GenericFlow.fromYaml(MAIN_TENANT, flowSource));
 
-        assertThat(flowRepositoryInterface.findAll(null).size(), is(1));
+        assertThat(flowRepositoryInterface.findAll(MAIN_TENANT).size()).isEqualTo(1);
 
-        assertThat(flowRepositoryInterface.findByIdWithSource(null, "some.namespace", "some-flow").get().getSource(), is(flowSource));
+        assertThat(flowRepositoryInterface.findByIdWithSource(MAIN_TENANT, "some.namespace", "some-flow").get().getSource()).isEqualTo(flowSource);
     }
 }

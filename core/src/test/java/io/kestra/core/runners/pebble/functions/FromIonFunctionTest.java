@@ -1,24 +1,30 @@
 package io.kestra.core.runners.pebble.functions;
 
-import com.google.common.collect.ImmutableMap;
-import io.kestra.core.exceptions.IllegalVariableEvaluationException;
-import io.kestra.core.junit.annotations.KestraTest;
-import io.kestra.core.runners.VariableRenderer;
-import io.kestra.core.serializers.FileSerde;
-import io.kestra.core.storages.StorageInterface;
-import io.kestra.core.utils.IdUtils;
-import jakarta.inject.Inject;
-import org.junit.jupiter.api.Test;
-
 import java.io.*;
 import java.net.URI;
 import java.util.Map;
 
+import org.junit.jupiter.api.Test;
+
+import com.google.common.collect.ImmutableMap;
+
+import io.kestra.core.exceptions.IllegalVariableEvaluationException;
+import io.kestra.core.runners.VariableRenderer;
+import io.kestra.core.serializers.FileSerde;
+import io.kestra.core.storages.StorageInterface;
+import io.kestra.core.utils.IdUtils;
+
+import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
+import jakarta.inject.Inject;
+
+import static io.kestra.core.tenant.TenantService.MAIN_TENANT;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.*;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-@KestraTest
+@MicronautTest
 class FromIonFunctionTest {
     @Inject
     VariableRenderer variableRenderer;
@@ -29,10 +35,10 @@ class FromIonFunctionTest {
     @Test
     void ionDecodeFunction() throws IllegalVariableEvaluationException {
         String render = variableRenderer.render("{{ fromIon('{date:2024-04-21T23:00:00.000Z, title:\"Main_Page\",views:109787}').title }}", Map.of());
-        assertThat(render, is("Main_Page"));
+        assertThat(render).isEqualTo("Main_Page");
 
         render = variableRenderer.render("{{ fromIon(null) }}", Map.of());
-        assertThat(render, emptyString());
+        assertThat(render).isEmpty();
     }
 
     @Test
@@ -40,29 +46,30 @@ class FromIonFunctionTest {
         File tempFile = File.createTempFile(this.getClass().getSimpleName().toLowerCase() + "_", ".trs");
         OutputStream output = new FileOutputStream(tempFile);
         for (int i = 0; i < 10; i++) {
-            FileSerde.write(output, ImmutableMap.of(
-                "id", i,
-                "name", "john"
-            ));
+            FileSerde.write(
+                output, ImmutableMap.of(
+                    "id", i,
+                    "name", "john"
+                )
+            );
         }
 
         Map<String, Object> variables = Map.of(
-            "flow", Map.of("id", "test", "namespace", "unit"),
+            "flow", Map.of("id", "test", "namespace", "unit", "tenantId", MAIN_TENANT),
             "execution", Map.of("id", "id-exec")
         );
 
         URI internalStorageURI = URI.create("/unit/test/executions/id-exec/" + IdUtils.create() + ".ion");
-        URI internalStorageFile = storageInterface.put(null, "unit", internalStorageURI, new FileInputStream(tempFile));
+        URI internalStorageFile = storageInterface.put(MAIN_TENANT, "unit", internalStorageURI, new FileInputStream(tempFile));
 
         String render = variableRenderer.render("{{ fromIon(read('" + internalStorageFile + "'), allRows=true) }}", variables);
-        assertThat(render, containsString("\"id\":0"));
-        assertThat(render, containsString("\"id\":9"));
+        assertThat(render).contains("\"id\":0");
+        assertThat(render).contains("\"id\":9");
 
         render = variableRenderer.render("{{ fromIon(read('" + internalStorageFile + "')) }}", variables);
-        assertThat(render, containsString("\"id\":0"));
+        assertThat(render).contains("\"id\":0");
         assertThat(render, not((containsString("\"id\":9"))));
     }
-
 
     @Test
     void exception() {

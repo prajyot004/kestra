@@ -1,16 +1,8 @@
 package io.kestra.jdbc.server;
 
-import io.kestra.core.contexts.KestraContext;
-import io.kestra.core.models.ServerType;
-import io.kestra.core.server.ServerConfig;
-import io.kestra.core.server.ServerInstanceFactory;
-import io.kestra.core.server.Service;
-import io.kestra.core.server.ServiceInstance;
-import io.kestra.core.server.LocalServiceStateFactory;
-import io.kestra.core.server.ServiceLivenessUpdater;
-import io.kestra.core.server.ServiceRegistry;
-import io.kestra.core.server.ServiceStateTransition;
-import io.kestra.core.server.WorkerTaskRestartStrategy;
+import java.time.Duration;
+import java.time.Instant;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -20,15 +12,16 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
-import java.time.Duration;
-import java.time.Instant;
+import io.kestra.core.contexts.KestraContext;
+import io.kestra.core.models.ServerType;
+import io.kestra.core.server.*;
 
 import static io.kestra.core.server.ServiceLivenessManagerTest.newServiceForState;
 import static io.kestra.core.server.ServiceLivenessManagerTest.serviceInstanceFor;
 import static io.kestra.core.server.ServiceStateTransition.Result.SUCCEEDED;
 import static org.mockito.ArgumentMatchers.any;
 
-@ExtendWith({MockitoExtension.class})
+@ExtendWith({ MockitoExtension.class })
 @MockitoSettings(strictness = Strictness.LENIENT)
 class JdbcServiceLivenessManagerTest {
 
@@ -37,7 +30,7 @@ class JdbcServiceLivenessManagerTest {
     @Mock
     public ServiceLivenessUpdater serviceLivenessUpdater;
 
-    private JdbcServiceLivenessManager serviceLivenessManager;
+    private ServiceLivenessManager serviceLivenessManager;
 
     @Mock
     private KestraContext context;
@@ -59,7 +52,7 @@ class JdbcServiceLivenessManagerTest {
             )
         );
 
-        this.serviceLivenessManager = new JdbcServiceLivenessManager(
+        this.serviceLivenessManager = new ServiceLivenessManager(
             config,
             new ServiceRegistry(),
             new LocalServiceStateFactory(config, null),

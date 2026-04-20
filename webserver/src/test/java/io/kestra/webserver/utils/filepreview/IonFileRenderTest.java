@@ -1,18 +1,18 @@
 package io.kestra.webserver.utils.filepreview;
 
-import io.kestra.core.serializers.FileSerde;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
-
 import java.io.*;
 import java.util.Map;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+import io.kestra.core.serializers.FileSerde;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 class IonFileRenderTest {
     @ParameterizedTest
-    @CsvSource({"0, false", "100, false", "101, true"})
+    @CsvSource({ "0, false", "100, false", "101, true" })
     void testTruncatedByLineCount(int lineCount, boolean truncated) throws IOException {
         File tempFile = File.createTempFile("unit", ".ion");
 
@@ -25,6 +25,6 @@ class IonFileRenderTest {
         final InputStream is = new DataInputStream(new FileInputStream(tempFile));
         IonFileRender render = new IonFileRender("ion", is, 100);
 
-        assertThat(render.truncated, is(truncated));
+        assertThat(render.truncated).isEqualTo(truncated);
     }
 }

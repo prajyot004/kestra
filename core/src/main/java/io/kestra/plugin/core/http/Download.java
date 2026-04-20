@@ -1,5 +1,18 @@
 package io.kestra.plugin.core.http;
 
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+
+import org.apache.commons.io.IOUtils;
+import org.slf4j.Logger;
+
 import io.kestra.core.http.HttpRequest;
 import io.kestra.core.http.HttpResponse;
 import io.kestra.core.http.client.HttpClient;
@@ -7,26 +20,13 @@ import io.kestra.core.http.client.HttpClientResponseException;
 import io.kestra.core.models.annotations.Example;
 import io.kestra.core.models.annotations.Metric;
 import io.kestra.core.models.annotations.Plugin;
-import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
+
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
-import org.apache.commons.io.IOUtils;
-import org.slf4j.Logger;
-
-import java.io.BufferedOutputStream;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.net.URI;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static io.kestra.core.utils.Rethrow.throwConsumer;
 
@@ -36,8 +36,9 @@ import static io.kestra.core.utils.Rethrow.throwConsumer;
 @Getter
 @NoArgsConstructor
 @Schema(
-    title = "Download a file from a HTTP server.",
-    description = "This task connects to a HTTP server and copy a file to Kestra's internal storage."
+    title = "Download a file over HTTP(S) to Kestra storage.",
+    description = """
+        Performs an HTTP request and streams the response body into internal storage. Validates Content-Length when present and can fail on empty responses (`failOnEmptyResponse`, unless `options.allowFailed` allows it). Filename is taken from `saveAs`, `Content-Disposition`, or derived from the URI."""
 )
 @Plugin(
     examples = {
@@ -62,7 +63,15 @@ import static io.kestra.core.utils.Rethrow.throwConsumer;
 public class Download extends AbstractHttp implements RunnableTask<Download.Output> {
     @Schema(title = "Should the task fail when downloading an empty file.")
     @Builder.Default
-    private final Property<Boolean> failOnEmptyResponse = Property.of(true);
+    private Property<Boolean> failOnEmptyResponse = Property.ofValue(true);
+
+    @Schema(
+        title = "Name of the file inside the output.",
+        description = """
+            If not provided, the filename will be extracted from the `Content-Disposition` header.
+            If no `Content-Disposition` header, a name would be generated."""
+    )
+    private Property<String> saveAs;
 
     public Output run(RunContext runContext) throws Exception {
         Logger logger = runContext.logger();
@@ -79,7 +88,8 @@ public class Download extends AbstractHttp implements RunnableTask<Download.Outp
 
             HttpResponse<Void> response = client.request(
                 request,
-                throwConsumer(r -> {
+                throwConsumer(r ->
+                {
                     if (r.getBody() != null) {
                         size.set(IOUtils.copyLarge(r.getBody(), output));
                     }
@@ -89,7 +99,8 @@ public class Download extends AbstractHttp implements RunnableTask<Download.Outp
                     }
 
                     if (r.getBody() != null) {
-                        r.getHeaders().firstValue("Content-Length").ifPresent(header -> {
+                        r.getHeaders().firstValue("Content-Length").ifPresent(header ->
+                        {
                             long length = Long.parseLong(header);
 
                             if (length != size.get()) {
@@ -113,20 +124,26 @@ public class Download extends AbstractHttp implements RunnableTask<Download.Outp
                 }
             }
 
-            String filename = null;
-            if (response.getHeaders().firstValue("Content-Disposition").isPresent()) {
-                String contentDisposition = response.getHeaders().firstValue("Content-Disposition").orElseThrow();
-                filename = filenameFromHeader(runContext, contentDisposition);
-            }
-            if (filename != null) {
-                filename = URLEncoder.encode(filename, StandardCharsets.UTF_8);
+            String rFilename = runContext.render(this.saveAs).as(String.class).orElse(null);
+            if (rFilename == null) {
+                if (response.getHeaders().firstValue("Content-Disposition").isPresent()) {
+                    String contentDisposition = response.getHeaders().firstValue("Content-Disposition").orElseThrow();
+                    rFilename = filenameFromHeader(runContext, contentDisposition);
+                    if (rFilename != null) {
+                        URLEncoder.encode(rFilename, StandardCharsets.UTF_8);
+                        rFilename = rFilename.replace(' ', '+');
+                        // brackets are IPv6 reserved characters
+                        rFilename = rFilename.replace("[", "%5B");
+                        rFilename = rFilename.replace("]", "%5D");
+                    }
+                }
             }
 
             logger.debug("File '{}' downloaded with size '{}'", from, size);
 
             return Output.builder()
                 .code(response.getStatus().getCode())
-                .uri(runContext.storage().putFile(tempFile, filename))
+                .uri(runContext.storage().putFile(tempFile, rFilename))
                 .headers(response.getHeaders().map())
                 .length(size.get())
                 .build();
@@ -175,8 +192,8 @@ public class Download extends AbstractHttp implements RunnableTask<Download.Outp
         if (path.indexOf('/') != -1) {
             path = path.substring(path.lastIndexOf('/')); // keep the last segment
         }
-        if (path.indexOf('.') != -1) {
-            return path.substring(path.indexOf('.'));
+        if (path.lastIndexOf('.') != -1) {
+            return path.substring(path.lastIndexOf('.'));
         }
         return null;
     }
@@ -185,22 +202,22 @@ public class Download extends AbstractHttp implements RunnableTask<Download.Outp
     @Getter
     public static class Output implements io.kestra.core.models.tasks.Output {
         @Schema(
-            title = "The URL of the downloaded file on Kestra's internal storage."
+            title = "The URL of the downloaded file in Kestra's internal storage"
         )
         private final URI uri;
 
         @Schema(
-            title = "The status code of the response."
+            title = "The status code of the response"
         )
         private final Integer code;
 
         @Schema(
-                title = "The content-length of the response."
+            title = "The content-length of the response"
         )
         private final Long length;
 
         @Schema(
-            title = "The headers of the response."
+            title = "The headers of the response"
         )
         private final Map<String, List<String>> headers;
     }

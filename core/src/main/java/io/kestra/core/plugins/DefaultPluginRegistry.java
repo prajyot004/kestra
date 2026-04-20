@@ -1,11 +1,5 @@
 package io.kestra.core.plugins;
 
-import io.kestra.core.models.Plugin;
-import jakarta.annotation.Nullable;
-import jakarta.validation.constraints.NotNull;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.Closeable;
 import java.io.IOException;
 import java.net.URL;
@@ -16,7 +10,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.ListIterator;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -27,6 +20,12 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
+import io.kestra.core.models.Plugin;
+
+import jakarta.annotation.Nullable;
+import jakarta.validation.constraints.NotNull;
+import lombok.extern.slf4j.Slf4j;
+
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -35,15 +34,14 @@ import static java.util.Objects.requireNonNull;
  * @see io.kestra.core.plugins.serdes.PluginDeserializer
  * @see PluginScanner
  */
+@Slf4j
 public class DefaultPluginRegistry implements PluginRegistry {
-
-    private static final Logger log = LoggerFactory.getLogger(DefaultPluginRegistry.class);
 
     private static class LazyHolder {
         static final DefaultPluginRegistry INSTANCE = new DefaultPluginRegistry();
     }
 
-    private final Map<PluginIdentifier, PluginClassAndMetadata<? extends Plugin>> pluginClassByIdentifier = new ConcurrentHashMap<>();
+    protected final Map<PluginIdentifier, PluginClassAndMetadata<? extends Plugin>> pluginClassByIdentifier = new ConcurrentHashMap<>();
     private final Map<PluginBundleIdentifier, RegisteredPlugin> plugins = new ConcurrentHashMap<>();
     private final PluginScanner scanner = new PluginScanner(DefaultPluginRegistry.class.getClassLoader());
     private final AtomicBoolean initialized = new AtomicBoolean(false);
@@ -56,7 +54,7 @@ public class DefaultPluginRegistry implements PluginRegistry {
      *
      * @return the {@link DefaultPluginRegistry}.
      */
-    public static DefaultPluginRegistry getOrCreate() {
+    public synchronized static DefaultPluginRegistry getOrCreate() {
         DefaultPluginRegistry instance = LazyHolder.INSTANCE;
         if (!instance.isInitialized()) {
             instance.init();
@@ -74,7 +72,7 @@ public class DefaultPluginRegistry implements PluginRegistry {
     /**
      * Initializes the registry by loading all core plugins.
      */
-    protected void init() {
+    protected synchronized void init() {
         if (initialized.compareAndSet(false, true)) {
             register(scanner.scan());
         }
@@ -103,11 +101,13 @@ public class DefaultPluginRegistry implements PluginRegistry {
      */
     @Override
     public void registerIfAbsent(final Path pluginPath) {
+        long start = System.currentTimeMillis();
         if (isPluginPathValid(pluginPath) && !isPluginPathScanned(pluginPath)) {
             List<RegisteredPlugin> scanned = scanner.scan(pluginPath);
             scanned.forEach(this::register);
             scannedPluginPaths.add(pluginPath);
         }
+        log.debug("Registered if absent plugins from path {} in {} ms", pluginPath, System.currentTimeMillis() - start);
     }
 
     private boolean isPluginPathScanned(final Path pluginPath) {
@@ -119,10 +119,12 @@ public class DefaultPluginRegistry implements PluginRegistry {
      */
     @Override
     public void register(final Path pluginPath) {
+        long start = System.currentTimeMillis();
         if (isPluginPathValid(pluginPath)) {
             List<RegisteredPlugin> scanned = scanner.scan(pluginPath);
             scanned.forEach(this::register);
         }
+        log.debug("Registered plugins from path {} in {} ms", pluginPath, System.currentTimeMillis() - start);
     }
 
     /**
@@ -151,7 +153,8 @@ public class DefaultPluginRegistry implements PluginRegistry {
                 this.plugins.remove(identifier);
 
                 // Remove all classes to this plugin from the registry
-                this.pluginClassByIdentifier.entrySet().removeIf(entry -> {
+                this.pluginClassByIdentifier.entrySet().removeIf(entry ->
+                {
                     PluginClassAndMetadata metadata = entry.getValue();
                     return metadata.type().getClassLoader().equals(current.getClassLoader());
                 });
@@ -191,48 +194,60 @@ public class DefaultPluginRegistry implements PluginRegistry {
      */
     public void register(final RegisteredPlugin plugin) {
         final PluginBundleIdentifier identifier = PluginBundleIdentifier.of(plugin);
-
-        // Skip registration if plugin-bundle already exists in the registry.
-        if (containsPluginBundle(identifier)) {
-            return;
+        // Skip registration if the same plugin already exists in the registry.
+        final RegisteredPlugin existing = plugins.get(identifier);
+        if (existing != null && existing.crc32() == plugin.crc32()) {
+            return; // same plugin already registered
         }
 
         lock.lock();
         try {
+            if (existing != null) {
+                unregister(List.of(existing));
+            }
             plugins.put(PluginBundleIdentifier.of(plugin), plugin);
-            pluginClassByIdentifier.putAll(getPluginClassesByIdentifier(plugin));
+            registerAll(getPluginClassesByIdentifier(plugin));
         } finally {
             lock.unlock();
         }
     }
 
+    protected void registerAll(Map<PluginIdentifier, PluginClassAndMetadata<? extends Plugin>> plugins) {
+        pluginClassByIdentifier.putAll(plugins);
+    }
+
     @SuppressWarnings("unchecked")
     protected Map<PluginIdentifier, PluginClassAndMetadata<? extends Plugin>> getPluginClassesByIdentifier(final RegisteredPlugin plugin) {
         Map<PluginIdentifier, PluginClassAndMetadata<? extends Plugin>> classes = new HashMap<>();
-        classes.putAll(plugin.allClass()
-            .stream()
-            .map(cls -> {
+        classes.putAll(
+            plugin.allClass()
+                .stream()
+                .map(cls ->
+                {
 
-                Class<? extends Plugin> pluginClass = (Class<? extends Plugin>) cls;
-                Class<Plugin> pluginBaseClass = plugin.baseClass(pluginClass.getName());
+                    Class<? extends Plugin> pluginClass = (Class<? extends Plugin>) cls;
+                    Class<Plugin> pluginBaseClass = plugin.baseClass(pluginClass.getName());
 
-                return new SimpleEntry<>(
-                    ClassTypeIdentifier.create(cls.getName()),
-                    PluginClassAndMetadata.create(plugin, pluginClass, pluginBaseClass, null)
-                );
-            })
-            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
+                    return new SimpleEntry<>(
+                        ClassTypeIdentifier.create(cls.getName()),
+                        PluginClassAndMetadata.create(plugin, pluginClass, pluginBaseClass, null)
+                    );
+                })
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue))
+        );
 
-        classes.putAll(plugin.getAliases().values().stream().map(e -> {
-                Class<? extends Plugin> pluginClass = (Class<? extends Plugin>) e.getValue();
-                Class<Plugin> pluginBaseClass = plugin.baseClass(pluginClass.getName());
+        classes.putAll(plugin.getAliases().values().stream().map(e ->
+        {
+            Class<? extends Plugin> pluginClass = (Class<? extends Plugin>) e.getValue();
+            Class<Plugin> pluginBaseClass = plugin.baseClass(pluginClass.getName());
 
-                return new SimpleEntry<>(
-                    ClassTypeIdentifier.create(e.getKey()),
-                    PluginClassAndMetadata.create(plugin, pluginClass, pluginBaseClass, e.getKey())
-                );
-            })
-            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
+            return new SimpleEntry<>(
+                ClassTypeIdentifier.create(e.getKey()),
+                PluginClassAndMetadata.create(plugin, pluginClass, pluginBaseClass, e.getKey())
+            );
+        })
+            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue))
+        );
         return classes;
     }
 
@@ -327,6 +342,14 @@ public class DefaultPluginRegistry implements PluginRegistry {
     @Override
     public void clear() {
         pluginClassByIdentifier.clear();
+    }
+
+    /**
+     * {@inheritDoc}
+     **/
+    @Override
+    public boolean isVersioningSupported() {
+        return false;
     }
 
     public record PluginBundleIdentifier(@Nullable URL location) {

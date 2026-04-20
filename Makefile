@@ -13,7 +13,7 @@ SHELL := /bin/bash
 
 KESTRA_BASEDIR := $(shell echo $${KESTRA_HOME:-$$HOME/.kestra/current})
 KESTRA_WORKER_THREAD := $(shell echo $${KESTRA_WORKER_THREAD:-4})
-VERSION := $(shell ./gradlew properties -q | awk '/^version:/ {print $$2}')
+VERSION := $(shell awk -F= '/^version=/ {gsub(/-SNAPSHOT/, "", $$2); gsub(/[[:space:]]/, "", $$2); print $$2}' gradle.properties)
 GIT_COMMIT := $(shell git rev-parse --short HEAD)
 GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 DATE := $(shell date --rfc-3339=seconds)
@@ -48,38 +48,43 @@ build-exec:
 	./gradlew -q executableJar --no-daemon --priority=normal
 
 install: build-exec
-	echo "Installing Kestra: ${KESTRA_BASEDIR}"
-	mkdir -p ${KESTRA_BASEDIR}/bin ${KESTRA_BASEDIR}/plugins ${KESTRA_BASEDIR}/flows ${KESTRA_BASEDIR}/logs
-	cp build/executable/* ${KESTRA_BASEDIR}/bin/kestra && chmod +x ${KESTRA_BASEDIR}/bin
-	VERSION_INSTALLED=$$(${KESTRA_BASEDIR}/bin/kestra --version); \
-	echo "Kestra installed successfully (version=$$VERSION_INSTALLED) 🚀"
-
-# Install plugins for Kestra from (.plugins file).
-install-plugins:
-	if [[ ! -f ".plugins" && ! -f ".plugins.override" ]]; then \
-		echo "[ERROR] file '$$(pwd)/.plugins' and '$$(pwd)/.plugins.override' not found."; \
+	@echo "Installing Kestra in ${KESTRA_BASEDIR}" ; \
+	KESTRA_BASEDIR="${KESTRA_BASEDIR}" ; \
+	mkdir -p "$${KESTRA_BASEDIR}/bin" "$${KESTRA_BASEDIR}/plugins" "$${KESTRA_BASEDIR}/flows" "$${KESTRA_BASEDIR}/logs" ; \
+	echo "Copying executable..." ; \
+	EXECUTABLE_FILE=$$(ls build/executable/kestra-* 2>/dev/null | head -n1) ; \
+	if [ -z "$${EXECUTABLE_FILE}" ]; then \
+		echo "[ERROR] No Kestra executable found in build/executable"; \
 		exit 1; \
-	fi; \
+	fi ; \
+	cp "$${EXECUTABLE_FILE}" "$${KESTRA_BASEDIR}/bin/kestra" ; \
+	chmod +x "$${KESTRA_BASEDIR}/bin/kestra" ; \
+	VERSION_INSTALLED=$$("$${KESTRA_BASEDIR}/bin/kestra" --version 2>/dev/null || echo "unknown") ; \
+	echo "Kestra installed successfully (version=$${VERSION_INSTALLED}) 🚀"
 
-	PLUGIN_LIST="./.plugins"; \
-	if [[ -f ".plugins.override" ]]; then \
-		PLUGIN_LIST="./.plugins.override"; \
-	fi; \
-	while IFS= read -r plugin; do \
-		[[ $$plugin =~ ^#.* ]] && continue; \
-		PLUGINS_PATH="${KESTRA_INSTALL_DIR}/plugins"; \
-		CURRENT_PLUGIN=$${plugin/LATEST/"${VERSION}"}; \
-		CURRENT_PLUGIN=$$(echo $$CURRENT_PLUGIN | cut -d':' -f2-); \
-		PLUGIN_FILE="$$PLUGINS_PATH/$$(echo $$CURRENT_PLUGIN | awk -F':' '{print $$2"-"$$3}').jar"; \
-		echo "Installing Kestra plugin $$CURRENT_PLUGIN > ${KESTRA_INSTALL_DIR}/plugins"; \
-		if [ -f "$$PLUGIN_FILE" ]; then \
-		    echo "Plugin already installed in > $$PLUGIN_FILE"; \
-        else \
+# Install plugins for Kestra from the API.
+install-plugins:
+	@echo "Installing plugins for Kestra version ${VERSION}" ; \
+	if [ -z "${VERSION}" ]; then \
+		echo "[ERROR] Kestra version could not be determined."; \
+		exit 1; \
+	fi ; \
+	PLUGINS_PATH="${KESTRA_BASEDIR}/plugins" ; \
+	echo "Fetching plugin list from Kestra API for version ${VERSION}..." ; \
+	RESPONSE=$$(curl -s "https://api.kestra.io/v1/plugins/artifacts/core-compatibility/${VERSION}/latest") ; \
+	if [ -z "$${RESPONSE}" ]; then \
+		echo "[ERROR] Failed to fetch plugin list from API."; \
+		exit 1; \
+	fi ; \
+	echo "Parsing plugin list (excluding EE and secret plugins)..." ; \
+	echo "$${RESPONSE}" | jq -r '.[] | select(.license == "OPEN_SOURCE" and (.groupId != "io.kestra.plugin.ee") and (.groupId != "io.kestra.ee.secret")) | .groupId + ":" + .artifactId + ":" + .version' | while read -r plugin; do \
+		[[ $$plugin =~ ^#.* ]] && continue ; \
+		CURRENT_PLUGIN=$${plugin} ; \
+		echo "Installing $$CURRENT_PLUGIN..." ; \
 		${KESTRA_BASEDIR}/bin/kestra plugins install $$CURRENT_PLUGIN \
-		--plugins ${KESTRA_BASEDIR}/plugins \
-		--repositories=https://s01.oss.sonatype.org/content/repositories/snapshots || exit 1; \
-		fi \
-    done < $$PLUGIN_LIST
+			--plugins ${KESTRA_BASEDIR}/plugins \
+			--repositories=https://central.sonatype.com/repository/maven-snapshots || exit 1 ; \
+	done
 
 # Build docker image from Kestra source.
 build-docker: build-exec
@@ -89,7 +94,7 @@ build-docker: build-exec
 		--compress \
 		--rm \
 		-f ./Dockerfile \
-		--build-arg="APT_PACKAGES=python3 python3-venv python-is-python3 python3-pip nodejs npm curl zip unzip" \
+		--build-arg="APT_PACKAGES=python3 python-is-python3 python3-pip curl jattach" \
 		--build-arg="PYTHON_LIBRARIES=kestra" \
 		-t ${DOCKER_IMAGE}:${VERSION} ${DOCKER_PATH} || exit 1 ;
 
@@ -130,9 +135,6 @@ datasources:
     username: kestra
     password: k3str4
 kestra:
-  server:
-    basic-auth:
-    enabled: false
   encryption:
     secret-key: 3ywuDa/Ec61VHkOX3RlI9gYq7CaD0mv0Pf3DHtAXA6U=
   repository:
@@ -181,8 +183,8 @@ clone-plugins:
 	@echo "Using PLUGIN_GIT_DIR: $(PLUGIN_GIT_DIR)"
 	@mkdir -p "$(PLUGIN_GIT_DIR)"
 	@echo "Fetching repository list from GitHub..."
-	@REPOS=$(gh repo list kestra-io -L 1000  --json  name | jq -r  .[].name | sort | grep "^plugin-") \
-	for repo in $$REPOS; do \
+	@REPOS=$$(gh repo list kestra-io -L 1000 --json name | jq -r .[].name | sort | grep "^plugin-"); \
+		for repo in $$REPOS; do \
 	    if [[ $$repo == plugin-* ]]; then \
 	        if [ -d "$(PLUGIN_GIT_DIR)/$$repo" ]; then \
 	            echo "Skipping: $$repo (Already cloned)"; \
@@ -193,6 +195,22 @@ clone-plugins:
 	    fi; \
 	done
 	@echo "Done!"
+
+# Pull every plugins in main or master branch
+pull-plugins:
+	@echo "🔍 Pulling repositories in '$(PLUGIN_GIT_DIR)'..."
+	@for repo in "$(PLUGIN_GIT_DIR)"/*; do \
+	    if [ -d "$$repo/.git" ]; then \
+	        branch=$$(git -C "$$repo" rev-parse --abbrev-ref HEAD); \
+	        if [[ "$$branch" == "master" || "$$branch" == "main" ]]; then \
+	            echo "🔄 Pulling: $$(basename "$$repo") (branch: $$branch)"; \
+	            git -C "$$repo" pull; \
+	        else \
+	            echo "❌ Skipping: $$(basename "$$repo") (Not on master or main branch, currently on $$branch)"; \
+	        fi; \
+	    fi; \
+	done
+	@echo "✅ Done pulling!"
 
 # Update all plugins jar
 build-plugins:

@@ -1,22 +1,5 @@
 package io.kestra.plugin.core.namespace;
 
-import io.kestra.core.exceptions.IllegalVariableEvaluationException;
-import io.kestra.core.models.annotations.Example;
-import io.kestra.core.models.annotations.Plugin;
-import io.kestra.core.models.annotations.PluginProperty;
-import io.kestra.core.models.property.Property;
-import io.kestra.core.models.tasks.RunnableTask;
-import io.kestra.core.models.tasks.Task;
-import io.kestra.core.runners.RunContext;
-import io.kestra.core.serializers.JacksonMapper;
-import io.kestra.core.storages.Namespace;
-import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.constraints.NotNull;
-import lombok.Builder;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.experimental.SuperBuilder;
-
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -27,14 +10,35 @@ import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 
+import io.kestra.core.exceptions.IllegalVariableEvaluationException;
+import io.kestra.core.models.annotations.Example;
+import io.kestra.core.models.annotations.Plugin;
+import io.kestra.core.models.annotations.PluginProperty;
+import io.kestra.core.models.property.Property;
+import io.kestra.core.models.tasks.RunnableTask;
+import io.kestra.core.models.tasks.Task;
+import io.kestra.core.runners.RunContext;
+import io.kestra.core.serializers.JacksonMapper;
+import io.kestra.core.storages.Namespace;
+
+import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.NotNull;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.experimental.SuperBuilder;
+
 import static io.kestra.core.utils.PathUtil.checkLeadingSlash;
 
 @SuperBuilder(toBuilder = true)
 @Getter
 @NoArgsConstructor
 @Schema(
-    title = "Upload one or multiple files to a specific namespace.",
-    description = "Use a regex glob pattern or a file path to upload files as Namespace Files. When using a map with the desired file name as key and file path as value, you can also rename or relocate files."
+    title = "Upload files into a Namespace.",
+    description = """
+        Sends files to Namespace storage via glob patterns (`files`) or explicit maps (`filesMap`). `destination` controls the target folder (leading slash required); `conflict` sets overwrite/skip/error behavior.
+
+        Accepts WorkingDirectory outputs or other task file maps so you can rename or relocate files while uploading."""
 )
 @Plugin(
     examples = {
@@ -113,12 +117,12 @@ import static io.kestra.core.utils.PathUtil.checkLeadingSlash;
 public class UploadFiles extends Task implements RunnableTask<UploadFiles.Output> {
     @NotNull
     @Schema(
-        title = "The namespace to which the files will be uploaded."
+        title = "The namespace to which the files will be uploaded"
     )
     private Property<String> namespace;
 
     @Schema(
-        title = "A list of Regex that match files in the current directory.",
+        title = "A list of Regex that match files in the current directory",
         description = "This should be a list of Regex matching the [Apache Ant patterns](https://ant.apache.org/manual/dirtasks.html#patterns)." +
             "It's primarily intended to be used with the `WorkingDirectory` task"
     )
@@ -126,33 +130,33 @@ public class UploadFiles extends Task implements RunnableTask<UploadFiles.Output
 
     @Schema(
         title = "A map of key-value pairs where the key is the filename and the value is the URI of the file to upload.",
-        description = "This should be a map of URI, with the key being the filename that will be upload, and the key the URI." +
-            "This one is intended to be used with output files of other tasks. Many Kestra tasks, incl. all Downloads tasks, " +
+        description = "This should be a map of URI, with the key being the filename that will be upload and the key the URI." +
+            "This property is intended to be used with the output files of other tasks. Many Kestra tasks, incl. all Downloads tasks, " +
             "output a map of files so that you can directly pass the output property to this task e.g. " +
             "[outputFiles in the S3 Downloads task](https://kestra.io/plugins/plugin-aws/tasks/s3/io.kestra.plugin.aws.s3.downloads#outputfiles) " +
             "or the [files in the Archive Decompress task](https://kestra.io/plugins/plugin-compress/tasks/io.kestra.plugin.compress.archivedecompress#files).",
-        anyOf = {Map.class, String.class}
+        anyOf = { Map.class, String.class }
     )
     @PluginProperty(dynamic = true)
     private Object filesMap;
 
     @Schema(
-        title = "The destination folder.",
+        title = "The destination folder",
         description = "Required when providing a list of files."
     )
     @Builder.Default
-    private Property<String> destination = Property.of("/");
+    private Property<String> destination = Property.ofValue("/");
 
     @Builder.Default
 
     @Schema(
-        title = "Which action to take when uploading a file that already exists.",
+        title = "Which action to take when uploading a file that already exists",
         description = "Can be one of the following options: OVERWRITE, ERROR or SKIP. Default is OVERWRITE."
     )
-    private Property<Namespace.Conflicts> conflict = Property.of(Namespace.Conflicts.OVERWRITE);
+    private Property<Namespace.Conflicts> conflict = Property.ofValue(Namespace.Conflicts.OVERWRITE);
 
     @Override
-    @SuppressWarnings({"unchecked"})
+    @SuppressWarnings({ "unchecked" })
     public UploadFiles.Output run(RunContext runContext) throws Exception {
         RunContext.FlowInfo flowInfo = runContext.flowInfo();
         String renderedNamespace = namespace != null ? runContext.render(namespace).as(String.class).orElseThrow() : flowInfo.namespace();
@@ -183,7 +187,8 @@ public class UploadFiles extends Task implements RunnableTask<UploadFiles.Output
         return Output.builder().build();
     }
 
-    private void uploadFiles(RunContext runContext, List<String> files, Namespace storageNamespace, String destination) throws IllegalVariableEvaluationException, IOException, URISyntaxException {
+    private void uploadFiles(RunContext runContext, List<String> files, Namespace storageNamespace, String destination)
+        throws IllegalVariableEvaluationException, IOException, URISyntaxException {
         files = runContext.render(files);
 
         for (Path path : runContext.workingDir().findAllFilesMatching(files)) {
@@ -195,7 +200,8 @@ public class UploadFiles extends Task implements RunnableTask<UploadFiles.Output
         }
     }
 
-    private void uploadFilesMap(RunContext runContext, Map<String, Object> filesMap, Namespace storageNamespace, String destination) throws IOException, URISyntaxException, IllegalVariableEvaluationException {
+    private void uploadFilesMap(RunContext runContext, Map<String, Object> filesMap, Namespace storageNamespace, String destination)
+        throws IOException, URISyntaxException, IllegalVariableEvaluationException {
         Map<String, Object> renderedMap = runContext.render(filesMap);
         for (Map.Entry<String, Object> entry : renderedMap.entrySet()) {
             String key = entry.getKey();

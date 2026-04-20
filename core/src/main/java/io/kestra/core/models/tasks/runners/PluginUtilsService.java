@@ -1,46 +1,38 @@
 package io.kestra.core.models.tasks.runners;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import io.kestra.core.exceptions.IllegalVariableEvaluationException;
-import io.kestra.core.models.executions.AbstractMetricEntry;
-import io.kestra.core.models.executions.LogEntry;
-import io.kestra.core.runners.DefaultRunContext;
-import io.kestra.core.runners.RunContext;
-import io.kestra.core.serializers.JacksonMapper;
-import io.kestra.core.services.FlowService;
-import jakarta.validation.constraints.NotNull;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-import org.apache.commons.lang3.StringUtils;
-import org.slf4j.Logger;
-import org.slf4j.event.Level;
-import org.slf4j.spi.LoggingEventBuilder;
-
 import java.io.*;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+
+import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+
+import io.kestra.core.exceptions.IllegalVariableEvaluationException;
+import io.kestra.core.models.property.URIFetcher;
+import io.kestra.core.models.tasks.runners.TaskLogLineMatcher.TaskLogMatch;
+import io.kestra.core.runners.DefaultRunContext;
+import io.kestra.core.runners.RunContext;
+import io.kestra.core.serializers.JacksonMapper;
+
+import jakarta.validation.constraints.NotNull;
 
 import static io.kestra.core.utils.Rethrow.throwConsumer;
 
 abstract public class PluginUtilsService {
-    private static final ObjectMapper MAPPER = JacksonMapper.ofJson(false);
-    private static final Pattern PATTERN = Pattern.compile("^::(\\{.*})::$");
-    private static final TypeReference<Map<String, String>> MAP_TYPE_REFERENCE = new TypeReference<>() {};
+
+    private static final TypeReference<Map<String, String>> MAP_TYPE_REFERENCE = new TypeReference<>() {
+    };
 
     public static Map<String, String> createOutputFiles(
         Path tempDirectory,
         List<String> outputFiles,
-        Map<String, Object> additionalVars
-    ) throws IOException {
+        Map<String, Object> additionalVars) throws IOException {
         return PluginUtilsService.createOutputFiles(tempDirectory, outputFiles, additionalVars, false);
     }
 
@@ -48,18 +40,18 @@ abstract public class PluginUtilsService {
         Path tempDirectory,
         List<String> outputFiles,
         Map<String, Object> additionalVars,
-        Boolean isDir
-    ) throws IOException {
+        Boolean isDir) throws IOException {
         List<String> outputs = new ArrayList<>();
 
-        if (outputFiles != null && outputFiles.size() > 0) {
+        if (outputFiles != null && !outputFiles.isEmpty()) {
             outputs.addAll(outputFiles);
         }
 
         Map<String, String> result = new HashMap<>();
-        if (outputs.size() > 0) {
+        if (!outputs.isEmpty()) {
             outputs
-                .forEach(throwConsumer(s -> {
+                .forEach(throwConsumer(s ->
+                {
                     PluginUtilsService.validFilename(s);
                     File tempFile;
 
@@ -76,7 +68,7 @@ abstract public class PluginUtilsService {
             if (!isDir) {
                 additionalVars.put("temp", result);
             }
-            additionalVars.put(isDir ? "outputDirs": "outputFiles", result);
+            additionalVars.put(isDir ? "outputDirs" : "outputFiles", result);
         }
 
         return result;
@@ -84,8 +76,9 @@ abstract public class PluginUtilsService {
 
     private static void validFilename(String s) {
         if (s.startsWith("./") || s.startsWith("..") || s.startsWith("/")) {
-            throw new IllegalArgumentException("Invalid outputFile (only relative path is supported) " +
-                "for path '" + s + "'"
+            throw new IllegalArgumentException(
+                "Invalid outputFile (only relative path is supported) " +
+                    "for path '" + s + "'"
             );
         }
     }
@@ -95,18 +88,19 @@ abstract public class PluginUtilsService {
     }
 
     @SuppressWarnings("unchecked")
-    public static Map<String, String> transformInputFiles(RunContext runContext, Map<String, Object> additionalVars, @NotNull Object inputFiles) throws IllegalVariableEvaluationException, JsonProcessingException {
+    public static Map<String, String> transformInputFiles(RunContext runContext, Map<String, Object> additionalVars, @NotNull Object inputFiles)
+        throws IllegalVariableEvaluationException, JsonProcessingException {
         if (inputFiles instanceof Map) {
-            Map<String, String> castedInputFiles = (Map<String, String>) ((Map<?, ?>) inputFiles);
+            Map<String, String> castedInputFiles = (Map<String, String>) inputFiles;
             Map<String, String> nullFilteredInputFiles = new HashMap<>();
-            castedInputFiles.forEach((key, val) -> {
+            castedInputFiles.forEach((key, val) ->
+            {
                 if (val != null) {
                     nullFilteredInputFiles.put(key, val);
                 }
             });
             return runContext.renderMap(nullFilteredInputFiles, additionalVars);
         } else if (inputFiles instanceof String inputFileString) {
-
 
             return JacksonMapper.ofJson(false).readValue(
                 runContext.render(inputFileString, additionalVars),
@@ -117,113 +111,26 @@ abstract public class PluginUtilsService {
         }
     }
 
+    public static Map<String, Object> parseOut(String line, Logger logger, RunContext runContext, boolean isStdErr, Instant customInstant) {
 
-    public static void createInputFiles(
-        RunContext runContext,
-        Path workingDirectory,
-        Map<String, String> inputFiles,
-        Map<String, Object> additionalVars
-    ) throws IOException, IllegalVariableEvaluationException, URISyntaxException {
-        if (inputFiles != null && inputFiles.size() > 0) {
-            for (String fileName : inputFiles.keySet()) {
-                String finalFileName = runContext.render(fileName);
+        TaskLogLineMatcher logLineMatcher = ((DefaultRunContext) runContext).services().taskLogLineMatcher();
 
-                PluginUtilsService.validFilename(finalFileName);
-
-                File file = new File(fileName);
-
-                // path with "/", create the subfolders
-                if (file.getParent() != null) {
-                    Path subFolder = Paths.get(
-                        workingDirectory.toAbsolutePath().toString(),
-                        new File(finalFileName).getParent()
-                    );
-
-                    if (!subFolder.toFile().exists()) {
-                        Files.createDirectories(subFolder);
-                    }
-                }
-
-                String filePath = workingDirectory + "/" + finalFileName;
-                String render = runContext.render(inputFiles.get(fileName), additionalVars);
-
-                if (render.startsWith("kestra://")) {
-                    try (
-                        InputStream inputStream = runContext.storage().getFile(new URI(render));
-                        OutputStream outputStream = new BufferedOutputStream(new FileOutputStream(filePath))
-                    ) {
-                        int byteRead;
-                        while ((byteRead = inputStream.read()) != -1) {
-                            outputStream.write(byteRead);
-                        }
-                        outputStream.flush();
-                    }
-                } else {
-                    try (BufferedWriter writer = new BufferedWriter(new FileWriter(filePath))) {
-                        writer.write(render);
-                    }
-                }
-            }
-        }
-    }
-
-    public static Map<String, Object> parseOut(String line, Logger logger, RunContext runContext, boolean isStdErr)  {
-        Matcher m = PATTERN.matcher(line);
         Map<String, Object> outputs = new HashMap<>();
-
-        if (m.find()) {
-            try {
-                BashCommand<?> bashCommand = MAPPER.readValue(m.group(1), BashCommand.class);
-
-                if (bashCommand.getOutputs() != null) {
-                    outputs.putAll(bashCommand.getOutputs());
-                }
-
-                if (bashCommand.getMetrics() != null) {
-                    bashCommand.getMetrics().forEach(runContext::metric);
-                }
-
-                if (bashCommand.getLogs() != null) {
-                    bashCommand.getLogs().forEach(logLine -> {
-                        try {
-                            LoggingEventBuilder builder = runContext
-                                .logger()
-                                .atLevel(logLine.getLevel());
-
-                            builder.log(logLine.getMessage());
-                        } catch (Exception e) {
-                            logger.warn("Invalid log '{}'", m.group(1), e);
-                        }
-                    });
-                }
-            }
-            catch (JsonProcessingException e) {
-                logger.warn("Invalid outputs '{}'", e.getMessage(), e);
-            }
-        } else {
-            if (isStdErr) {
+        try {
+            Optional<TaskLogMatch> matches = logLineMatcher.matches(line, logger, runContext, customInstant);
+            if (matches.isPresent()) {
+                TaskLogMatch taskLogMatch = matches.get();
+                outputs.putAll(taskLogMatch.outputs());
+            } else if (isStdErr) {
                 runContext.logger().error(line);
             } else {
                 runContext.logger().info(line);
             }
+
+        } catch (IOException e) {
+            logger.warn("Invalid outputs '{}'", e.getMessage(), e);
         }
-
         return outputs;
-    }
-
-    @NoArgsConstructor
-    @Data
-    public static class BashCommand <T> {
-        private Map<String, Object> outputs;
-        private List<AbstractMetricEntry<T>> metrics;
-        private List<LogLine> logs;
-    }
-
-    @NoArgsConstructor
-    @Data
-    public static class LogLine {
-        private Level level;
-        private String message;
     }
 
     /**
@@ -250,8 +157,7 @@ abstract public class PluginUtilsService {
                 realNamespace = runContext.render(namespace);
                 realFlowId = runContext.render(flowId);
                 // validate that the flow exists: a.k.a access is authorized by this namespace
-                FlowService flowService = ((DefaultRunContext)runContext).getApplicationContext().getBean(FlowService.class);
-                flowService.checkAllowedNamespace(flowInfo.tenantId(), realNamespace, flowInfo.tenantId(), flowInfo.namespace());
+                runContext.acl().allowNamespace(realNamespace).check();
             } else if (namespace != null || flowId != null) {
                 throw new IllegalArgumentException("Both `namespace` and `flowId` must be set when `executionId` is set.");
             } else {
@@ -271,5 +177,75 @@ abstract public class PluginUtilsService {
         return new ExecutionInfo(realTenantId, realNamespace, realFlowId, realExecutionId);
     }
 
-    public record ExecutionInfo(String tenantId, String namespace, String flowId, String id) {}
+    /**
+     * @param render whether to render file contents using Pebble expressions.
+     */
+    private static void createInputFilesInternal(RunContext runContext, Path workingDirectory, Map<String, String> inputFiles, Map<String, Object> additionalVars, boolean render)
+        throws Exception {
+        if (inputFiles != null && !inputFiles.isEmpty()) {
+            for (String fileName : inputFiles.keySet()) {
+                String finalFileName = runContext.render(fileName);
+
+                PluginUtilsService.validFilename(finalFileName);
+
+                File file = new File(finalFileName);
+
+                // path with "/", create the subfolders
+                if (file.getParent() != null) {
+                    Path subFolder = Paths.get(
+                        workingDirectory.toAbsolutePath().toString(),
+                        new File(finalFileName).getParent()
+                    );
+
+                    if (!subFolder.toFile().exists()) {
+                        Files.createDirectories(subFolder);
+                    }
+                }
+
+                String filePath = workingDirectory + "/" + finalFileName;
+                String rFile;
+                if (render) {
+                    rFile = runContext.render(inputFiles.get(fileName), additionalVars);
+                } else {
+                    rFile = inputFiles.get(fileName);
+                }
+
+                if (URIFetcher.supports(rFile)) {
+                    var uri = URIFetcher.of(rFile);
+                    try (
+                        InputStream inputStream = new BufferedInputStream(uri.fetch(runContext));
+                        OutputStream outputStream = new BufferedOutputStream(new FileOutputStream(filePath))
+                    ) {
+                        int byteRead;
+                        while ((byteRead = inputStream.read()) != -1) {
+                            outputStream.write(byteRead);
+                        }
+                        outputStream.flush();
+                    }
+                } else {
+                    try (BufferedWriter writer = new BufferedWriter(new FileWriter(filePath))) {
+                        writer.write(rFile);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Create input files with rendered contents.
+     */
+    public static void createInputFiles(RunContext runContext, Path workingDirectory, Map<String, String> inputFiles, Map<String, Object> additionalVars) throws Exception {
+        createInputFilesInternal(runContext, workingDirectory, inputFiles, additionalVars, true);
+    }
+
+    /**
+     * Create input files without rendering their contents.
+     * Useful for tools that rely on their own templating syntax (e.g. Ansible).
+     */
+    public static void createInputFilesRaw(RunContext runContext, Path workingDirectory, Map<String, String> inputFiles) throws Exception {
+        createInputFilesInternal(runContext, workingDirectory, inputFiles, Map.of(), false);
+    }
+
+    public record ExecutionInfo(String tenantId, String namespace, String flowId, String id) {
+    }
 }

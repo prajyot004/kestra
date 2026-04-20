@@ -1,12 +1,22 @@
 package io.kestra.webserver.controllers;
 
+import java.io.FileNotFoundException;
+import java.lang.reflect.Field;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedList;
+import java.util.NoSuchElementException;
+import java.util.Optional;
+import java.util.stream.Collectors;
+
 import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 import com.fasterxml.jackson.databind.exc.InvalidTypeIdException;
-import io.kestra.core.exceptions.DeserializationException;
-import io.kestra.core.exceptions.InvalidException;
-import io.kestra.core.exceptions.ResourceExpiredException;
+
+import io.kestra.core.exceptions.*;
+import io.kestra.libs.copilot.exceptions.AiException;
+
 import io.micronaut.core.convert.exceptions.ConversionErrorException;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
@@ -19,17 +29,8 @@ import io.micronaut.http.hateoas.JsonError;
 import io.micronaut.http.hateoas.Link;
 import io.micronaut.web.router.exceptions.UnsatisfiedBodyRouteException;
 import io.micronaut.web.router.exceptions.UnsatisfiedQueryValueRouteException;
-import lombok.extern.slf4j.Slf4j;
-
-import java.io.FileNotFoundException;
-import java.lang.reflect.Field;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.LinkedList;
-import java.util.NoSuchElementException;
-import java.util.Optional;
-import java.util.stream.Collectors;
 import jakarta.validation.ConstraintViolationException;
+import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 @Controller
@@ -37,6 +38,11 @@ public class ErrorController {
     @Error(global = true)
     public HttpResponse<JsonError> error(HttpRequest<?> request, JsonParseException e) {
         return jsonError(request, e, HttpStatus.UNPROCESSABLE_ENTITY, "Invalid json");
+    }
+
+    @Error(global = true)
+    public HttpResponse<JsonError> error(HttpRequest<?> request, InputOutputValidationException e) {
+        return jsonError(request, e, HttpStatus.UNPROCESSABLE_ENTITY, "Invalid entity");
     }
 
     @Error(global = true)
@@ -106,12 +112,12 @@ public class ErrorController {
                 "errors",
                 e.getConstraintViolations()
                     .stream()
-                    .map(ex -> new JsonError(ex.getMessage())
-                        .path(ex.getPropertyPath().toString())
+                    .map(
+                        ex -> new JsonError(ex.getMessage())
+                            .path(ex.getPropertyPath().toString())
                     )
                     .collect(Collectors.toList())
             );
-
 
         return jsonError(error, HttpStatus.UNPROCESSABLE_ENTITY, "Invalid entity");
     }
@@ -119,6 +125,11 @@ public class ErrorController {
     @Error(global = true)
     public HttpResponse<JsonError> error(HttpRequest<?> request, IllegalArgumentException e) {
         return jsonError(request, e, HttpStatus.UNPROCESSABLE_ENTITY, "Illegal argument");
+    }
+
+    @Error(global = true)
+    public HttpResponse<JsonError> error(HttpRequest<?> request, AiException e) {
+        return jsonError(request, HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
     }
 
     @Error(global = true)
@@ -140,6 +151,26 @@ public class ErrorController {
     public HttpResponse<JsonError> error(HttpRequest<?> request, InvalidException e) {
         String entity = Optional.ofNullable(e.invalidObject()).map(Object::getClass).map(Class::getSimpleName).orElse("entity");
         return jsonError(request, e, HttpStatus.UNPROCESSABLE_ENTITY, "Invalid " + entity);
+    }
+
+    @Error(global = true)
+    public HttpResponse<JsonError> error(HttpRequest<?> request, NotFoundException e) {
+        return jsonError(request, e, HttpStatus.NOT_FOUND, HttpStatus.NOT_FOUND.getReason());
+    }
+
+    @Error(global = true)
+    public HttpResponse<JsonError> error(HttpRequest<?> request, ConflictException e) {
+        return jsonError(request, e, HttpStatus.CONFLICT, HttpStatus.CONFLICT.getReason());
+    }
+
+    @Error(global = true)
+    public HttpResponse<JsonError> error(HttpRequest<?> request, InvalidQueryFiltersException e) {
+        return jsonError(request, e, HttpStatus.BAD_REQUEST, "Invalid query filters");
+    }
+
+    @Error(global = true)
+    public HttpResponse<JsonError> error(HttpRequest<?> request, ValidationErrorException e) {
+        return jsonError(request, e, HttpStatus.BAD_REQUEST, e.formatedInvalidObjects());
     }
 
     @Error(global = true)
@@ -189,7 +220,7 @@ public class ErrorController {
 
     private static HttpResponse<JsonError> jsonError(JsonError jsonError, HttpStatus status, String reason) {
         return HttpResponse
-            .<JsonError>status(status, reason)
+            .<JsonError> status(status, reason)
             .body(jsonError);
     }
 
@@ -202,9 +233,9 @@ public class ErrorController {
 
     public static HttpResponse<JsonError> jsonError(HttpRequest<?> request, Throwable e, HttpStatus status, String reason) {
         if (status == HttpStatus.INTERNAL_SERVER_ERROR) {
-            log.error(e.getMessage(), e);
+            log.error("Server error: {}", e.getMessage() != null ? e.getMessage() : "", e);
         } else {
-            log.trace(e.getMessage(), e);
+            log.trace("Client error: {}", e.getMessage() != null ? e.getMessage() : "", e);
         }
 
         JsonError error = new JsonError(reason + (e.getMessage() != null ? ": " + e.getMessage() : ""))

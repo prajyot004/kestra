@@ -1,13 +1,15 @@
 package io.kestra.core.server;
 
-import io.kestra.core.utils.Await;
-import jakarta.inject.Singleton;
-
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeoutException;
+
+import org.awaitility.Awaitility;
+import org.awaitility.core.ConditionTimeoutException;
+
+import jakarta.inject.Singleton;
+import io.kestra.core.utils.Await;
 
 /**
  * Service for registering local service states.
@@ -17,7 +19,7 @@ import java.util.concurrent.TimeoutException;
 @Singleton
 public final class ServiceRegistry {
 
-    private final ConcurrentHashMap<Service.ServiceType, LocalServiceState> services = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<ServiceType, LocalServiceState> services = new ConcurrentHashMap<>();
 
     /**
      * Registers or update the given {@link LocalServiceState}.
@@ -37,16 +39,16 @@ public final class ServiceRegistry {
         services.remove(service.service().getType());
     }
 
-    public boolean containsService(final Service.ServiceType type) {
+    public boolean containsService(final ServiceType type) {
         return services.containsKey(type);
     }
 
-    public Service getServiceByType(final Service.ServiceType type) {
+    public Service getServiceByType(final ServiceType type) {
         return services.get(type).service();
     }
 
-    public Service waitForServiceAndGet(final Service.ServiceType type) {
-        Await.until(() -> containsService(type));
+    public Service waitForServiceAndGet(final ServiceType type) {
+        Await.await().forever().until(() -> containsService(type));
         return getServiceByType(type);
     }
 
@@ -56,7 +58,7 @@ public final class ServiceRegistry {
      * @param type The service type.
      * @return The {@link LocalServiceState} or {@code null}.
      */
-    public LocalServiceState get(final Service.ServiceType type) {
+    public LocalServiceState get(final ServiceType type) {
         return services.get(type);
     }
 
@@ -72,21 +74,23 @@ public final class ServiceRegistry {
     /**
      * Waits for a given service to be in a given state if registered.
      *
-     * @param type            The service type
-     * @param state           The expected state.
+     * @param type The service type
+     * @param state The expected state.
      * @param maxWaitDuration The max wait duration.
      * @return {@code true} if the service is in the expected state. Otherwise {@code false}.
      */
-    public boolean waitForServiceInState(final Service.ServiceType type,
-                                         final Service.ServiceState state,
-                                         final Duration maxWaitDuration) {
-        if (!containsService(type)) return false;
+    public boolean waitForServiceInState(final ServiceType type,
+        final Service.ServiceState state,
+        final Duration maxWaitDuration) {
+        if (!containsService(type))
+            return false;
         try {
-            Await.until(() -> {
+            Await.await().atMost(maxWaitDuration).pollInterval(Duration.ofMillis(100)).until(() ->
+            {
                 LocalServiceState service = get(type);
                 return service != null && service.instance().is(state);
-            }, Duration.ofMillis(100), maxWaitDuration);
-        } catch (TimeoutException e) {
+            });
+        } catch (ConditionTimeoutException e) {
             return false;
         }
         return true;

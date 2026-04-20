@@ -1,18 +1,18 @@
 <template>
-    <executions :restore-url="false" filter :topbar="false" :namespace="flow.namespace" :flow-id="flow.id" />
+    <Executions
+        :namespace="flowStore.flow?.namespace"
+        :flowId="flowStore.flow?.id"
+        :topbar="false"
+        :defaultScopeFilter="false"
+        filter
+    />
 </template>
 
-<script>
+<script setup lang="ts">
     import Executions from "../executions/Executions.vue";
-    import {mapState} from "vuex";
 
-    export default {
-        inheritAttrs: false,
-        components: {
-            Executions,
-        },
-        computed: {
-            ...mapState("flow", ["flow"]),
-        }
-    };
+    import {useFlowStore} from "../../stores/flow";
+    const flowStore = useFlowStore();
+
+    defineOptions({inheritAttrs: false});
 </script>

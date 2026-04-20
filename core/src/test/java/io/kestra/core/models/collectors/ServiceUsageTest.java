@@ -1,11 +1,5 @@
 package io.kestra.core.models.collectors;
 
-import io.kestra.core.server.Service;
-import io.kestra.core.server.ServiceInstance;
-import io.kestra.core.utils.IdUtils;
-import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.Test;
-
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -15,8 +9,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-class ServiceUsageTest {
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 
+import io.kestra.core.server.Service;
+import io.kestra.core.server.ServiceInstance;
+import io.kestra.core.server.ServiceType;
+import io.kestra.core.utils.IdUtils;
+
+class ServiceUsageTest {
 
     @Test
     void shouldGetDailyUsage() {
@@ -31,8 +32,8 @@ class ServiceUsageTest {
             Instant updatedAt = start.atStartOfDay(ZoneId.systemDefault()).plus(Duration.ofHours(10)).toInstant();
             ServiceInstance instance = new ServiceInstance(
                 IdUtils.create(),
-                Service.ServiceType.WORKER,
-                Service.ServiceState.EMPTY,
+                ServiceType.WORKER,
+                Service.ServiceState.INACTIVE,
                 null,
                 createAt,
                 updatedAt,
@@ -50,7 +51,7 @@ class ServiceUsageTest {
 
         // When
         ServiceUsage.DailyServiceStatistics statistics = ServiceUsage.of(
-            Service.ServiceType.WORKER,
+            ServiceType.WORKER,
             Duration.ofMinutes(15),
             instances
         );

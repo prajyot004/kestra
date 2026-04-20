@@ -1,36 +1,37 @@
 <template>
-    <div data-component="FILENAME_PLACEHOLDER" v-if="name" id="environment">
+    <div v-if="name" id="environment">
         <strong>{{ name }}</strong>
     </div>
 </template>
 
-<script>
-    import {mapGetters} from "vuex";
+<script setup lang="ts">
     import {cssVariable} from "@kestra-io/ui-libs";
+    import {useLayoutStore} from "../../stores/layout";
+    import {useMiscStore} from "override/stores/misc";
+    import {computed} from "vue";
 
-    export default {
-        computed: {
-            ...mapGetters("layout", ["envName", "envColor"]),
-            ...mapGetters("misc", ["configs"]),
-            name() {
-                return this.envName || this.configs?.environment?.name;
-            },
-            color() {
-                if (this.envColor) {
-                    return this.envColor;
-                }
+    const layoutStore = useLayoutStore(); 
+    const miscStore = useMiscStore(); 
+    
+    const name = computed(() => {
+        return layoutStore.envName || miscStore.configs?.environment?.name;
+    })
 
-                if (this.configs?.environment?.color) {
-                    return this.configs.environment.color;
-                }
-
-                return cssVariable("--bs-info");
-            }
+    const color = computed(() => {
+        if (layoutStore.envColor) {
+            return layoutStore.envColor;
         }
-    }
+
+        if (miscStore.configs?.environment?.color) {
+            return miscStore.configs.environment.color;
+        }
+
+        return cssVariable("--bs-info");
+    })
+
 </script>
 
-<style lang="scss" scoped>
+<style scoped lang="scss">
 #environment {
     margin-bottom: 1.5rem;
     text-align: center;

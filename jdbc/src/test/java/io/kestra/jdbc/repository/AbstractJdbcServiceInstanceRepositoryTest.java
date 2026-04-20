@@ -1,21 +1,5 @@
 package io.kestra.jdbc.repository;
 
-import io.kestra.core.server.ServerConfig;
-import io.kestra.core.server.ServerInstance;
-import io.kestra.core.server.Service;
-import io.kestra.core.server.ServiceInstance;
-import io.kestra.core.server.ServiceStateTransition;
-import io.kestra.core.server.WorkerTaskRestartStrategy;
-import io.kestra.core.utils.IdUtils;
-import io.kestra.core.utils.Network;
-import io.kestra.jdbc.JdbcTestUtils;
-import io.kestra.core.junit.annotations.KestraTest;
-import jakarta.inject.Inject;
-import org.hamcrest.Matchers;
-import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -24,17 +8,34 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+
+import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.repositories.AbstractServiceInstanceRepositoryTest;
+import io.kestra.core.server.*;
+import io.kestra.core.utils.IdUtils;
+import io.kestra.core.utils.Network;
+import io.kestra.jdbc.JdbcTestUtils;
+
+import jakarta.inject.Inject;
+
 import static io.kestra.core.server.ServiceStateTransition.Result.FAILED;
 import static io.kestra.core.server.ServiceStateTransition.Result.SUCCEEDED;
-import static org.hamcrest.MatcherAssert.assertThat;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @KestraTest
-public abstract class AbstractJdbcServiceInstanceRepositoryTest {
+@Execution(ExecutionMode.SAME_THREAD)
+public abstract class AbstractJdbcServiceInstanceRepositoryTest extends AbstractServiceInstanceRepositoryTest {
 
     @Inject
     protected AbstractJdbcServiceInstanceRepository repository;
+    @Inject
+    private ServiceLivenessUpdater serviceLivenessUpdater;
 
     @Inject
     JdbcTestUtils jdbcTestUtils;
@@ -51,7 +52,7 @@ public abstract class AbstractJdbcServiceInstanceRepositoryTest {
         ServiceInstance instance = AbstractJdbcServiceInstanceRepositoryTest.Fixtures.RunningServiceInstance;
 
         // When
-        repository.update(instance);
+        repository.save(instance);
 
         // Then
         Optional<ServiceInstance> result = repository.findById(instance.uid());
@@ -61,7 +62,7 @@ public abstract class AbstractJdbcServiceInstanceRepositoryTest {
     @Test
     protected void shouldDeleteGivenServiceInstance() {
         // Given
-        AbstractJdbcServiceInstanceRepositoryTest.Fixtures.all().forEach(repository::update);
+        AbstractJdbcServiceInstanceRepositoryTest.Fixtures.all().forEach(repository::save);
         final ServiceInstance instance = AbstractJdbcServiceInstanceRepositoryTest.Fixtures.EmptyServiceInstance;
 
         // When
@@ -75,7 +76,7 @@ public abstract class AbstractJdbcServiceInstanceRepositoryTest {
     @Test
     protected void shouldFindByServiceId() {
         // Given
-        AbstractJdbcServiceInstanceRepositoryTest.Fixtures.all().forEach(repository::update);
+        AbstractJdbcServiceInstanceRepositoryTest.Fixtures.all().forEach(repository::save);
         String uuid = AbstractJdbcServiceInstanceRepositoryTest.Fixtures.EmptyServiceInstance.uid();
 
         // When
@@ -88,40 +89,27 @@ public abstract class AbstractJdbcServiceInstanceRepositoryTest {
     @Test
     protected void shouldFindAllServiceInstances() {
         // Given
-        AbstractJdbcServiceInstanceRepositoryTest.Fixtures.all().forEach(repository::update);
+        AbstractJdbcServiceInstanceRepositoryTest.Fixtures.all().forEach(repository::save);
 
         // When
         List<ServiceInstance> results = repository.findAll();
 
         // Then
         assertEquals(results.size(), AbstractJdbcServiceInstanceRepositoryTest.Fixtures.all().size());
-        assertThat(results, Matchers.containsInAnyOrder(AbstractJdbcServiceInstanceRepositoryTest.Fixtures.all().toArray()));
-    }
-
-    @Test
-    protected void shouldFindAllNonRunningInstances() {
-        // Given
-        AbstractJdbcServiceInstanceRepositoryTest.Fixtures.all().forEach(repository::update);
-
-        // When
-        List<ServiceInstance> results = repository.findAllNonRunningInstances();
-
-        // Then
-        assertEquals(AbstractJdbcServiceInstanceRepositoryTest.Fixtures.allNonRunning().size(), results.size());
-        assertThat(results, Matchers.containsInAnyOrder(AbstractJdbcServiceInstanceRepositoryTest.Fixtures.allNonRunning().toArray()));
+        assertThat(results).containsExactlyInAnyOrder(AbstractJdbcServiceInstanceRepositoryTest.Fixtures.all().toArray(ServiceInstance[]::new));
     }
 
     @Test
     protected void shouldFindAllInstancesInNotRunningState() {
         // Given
-        AbstractJdbcServiceInstanceRepositoryTest.Fixtures.all().forEach(repository::update);
+        AbstractJdbcServiceInstanceRepositoryTest.Fixtures.all().forEach(repository::save);
 
         // When
         List<ServiceInstance> results = repository.findAllInstancesInNotRunningState();
 
         // Then
         assertEquals(AbstractJdbcServiceInstanceRepositoryTest.Fixtures.allInNotRunningState().size(), results.size());
-        assertThat(results, Matchers.containsInAnyOrder(AbstractJdbcServiceInstanceRepositoryTest.Fixtures.allInNotRunningState().toArray()));
+        assertThat(results).containsExactlyInAnyOrder(AbstractJdbcServiceInstanceRepositoryTest.Fixtures.allInNotRunningState().toArray(ServiceInstance[]::new));
     }
 
     @Test
@@ -130,7 +118,7 @@ public abstract class AbstractJdbcServiceInstanceRepositoryTest {
         ServiceInstance instance = Fixtures.RunningServiceInstance;
 
         // When
-        ServiceStateTransition.Response result = repository
+        ServiceStateTransition.Response result = serviceLivenessUpdater
             .update(instance, Service.ServiceState.TERMINATING);
 
         // Then
@@ -141,10 +129,10 @@ public abstract class AbstractJdbcServiceInstanceRepositoryTest {
     void shouldReturnSucceedTransitionResponseForValidTransition() {
         // Given
         ServiceInstance instance = Fixtures.RunningServiceInstance;
-        repository.update(instance);
+        repository.save(instance);
 
         // When
-        ServiceStateTransition.Response response = repository
+        ServiceStateTransition.Response response = serviceLivenessUpdater
             .update(instance, Service.ServiceState.TERMINATING); // RUNNING -> TERMINATING: valid transition
 
         // Then
@@ -157,14 +145,29 @@ public abstract class AbstractJdbcServiceInstanceRepositoryTest {
     void shouldReturnInvalidTransitionResponseForInvalidTransition() {
         // Given
         ServiceInstance instance = Fixtures.EmptyServiceInstance;
-        repository.update(instance);
+        repository.save(instance);
 
         // When
-        ServiceStateTransition.Response response = repository
+        ServiceStateTransition.Response response = serviceLivenessUpdater
             .update(instance, Service.ServiceState.RUNNING); // EMPTY -> RUNNING: INVALID transition
 
         // Then
         Assertions.assertEquals(new ServiceStateTransition.Response(FAILED, instance), response);
+    }
+
+    @Test
+    void shouldPurgeServiceInstance() {
+        // Given
+        ServiceInstance instance = Fixtures.RunningServiceInstance;
+        repository.save(instance);
+        instance = Fixtures.EmptyServiceInstance;
+        repository.save(instance);
+
+        // When
+        int purged = repository.purgeEmptyInstances(Instant.now());
+
+        //Then
+        assertThat(purged).isEqualTo(1);
     }
 
     public static final class Fixtures {
@@ -194,23 +197,17 @@ public abstract class AbstractJdbcServiceInstanceRepositoryTest {
             return List.of(NotRunningServiceInstance);
         }
 
-        public static final ServiceInstance RunningServiceInstance =
-            serviceInstanceFor(Service.ServiceState.RUNNING);
+        public static final ServiceInstance RunningServiceInstance = serviceInstanceFor(Service.ServiceState.RUNNING);
 
-        public static final ServiceInstance PendingShutdownServiceInstance =
-            serviceInstanceFor(Service.ServiceState.TERMINATING);
+        public static final ServiceInstance PendingShutdownServiceInstance = serviceInstanceFor(Service.ServiceState.TERMINATING);
 
-        public static final ServiceInstance GracefulShutdownServiceInstance =
-            serviceInstanceFor(Service.ServiceState.TERMINATED_GRACEFULLY);
+        public static final ServiceInstance GracefulShutdownServiceInstance = serviceInstanceFor(Service.ServiceState.TERMINATED_GRACEFULLY);
 
-        public static final ServiceInstance ForcedShutdownServiceInstance =
-            serviceInstanceFor(Service.ServiceState.TERMINATED_FORCED);
+        public static final ServiceInstance ForcedShutdownServiceInstance = serviceInstanceFor(Service.ServiceState.TERMINATED_FORCED);
 
-        public static final ServiceInstance NotRunningServiceInstance =
-            serviceInstanceFor(Service.ServiceState.NOT_RUNNING);
+        public static final ServiceInstance NotRunningServiceInstance = serviceInstanceFor(Service.ServiceState.NOT_RUNNING);
 
-        public static final ServiceInstance EmptyServiceInstance =
-            serviceInstanceFor(Service.ServiceState.EMPTY);
+        public static final ServiceInstance EmptyServiceInstance = serviceInstanceFor(Service.ServiceState.INACTIVE);
 
         public static ServiceInstance serviceInstanceFor(final Service.ServiceState state) {
             ServerConfig config = new ServerConfig(
@@ -226,7 +223,7 @@ public abstract class AbstractJdbcServiceInstanceRepositoryTest {
             );
             return new ServiceInstance(
                 IdUtils.create(),
-                Service.ServiceType.WORKER,
+                ServiceType.WORKER,
                 state,
                 new ServerInstance(
                     ServerInstance.Type.STANDALONE,

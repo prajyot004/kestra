@@ -1,9 +1,19 @@
-import {ref, getCurrentInstance} from "vue";
+import {ref} from "vue";
 import Tabs from "../../../src/components/Tabs.vue";
+import {vueRouter} from "storybook-vue3-router";
 
 const meta = {
     title: "components/Tabs",
     component: Tabs,
+    decorators: [
+        vueRouter([
+            {
+                path: "/",
+                name: "home",
+                component: {template: "<div>home</div>"}
+            },
+        ])
+    ],
 }
 
 export default meta;
@@ -24,20 +34,11 @@ const tabs = [
 ]
 
 /**
- * @type {import('@storybook/vue3').StoryObj<typeof ShowCase>}
+ * @type {import('@storybook/vue3-vite').StoryObj<typeof ShowCase>}
  */
 export const Default = {
     render: () => ({
         setup(){
-            // mock app router
-            const app = getCurrentInstance()?.appContext.config.globalProperties
-            if(app){
-                app.$router = {}
-                app.$route = {
-                    params: {tab: "first"}
-                }
-            }
-
             const activeTab = ref(tabs[0].name)
 
             function tabChanged(tab) {

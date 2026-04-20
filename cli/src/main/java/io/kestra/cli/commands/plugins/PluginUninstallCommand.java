@@ -1,26 +1,27 @@
 package io.kestra.cli.commands.plugins;
 
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
+
 import io.kestra.cli.AbstractCommand;
 import io.kestra.core.plugins.LocalPluginManager;
 import io.kestra.core.plugins.MavenPluginDownloader;
 import io.kestra.core.plugins.PluginArtifact;
 import io.kestra.core.plugins.PluginManager;
+
 import jakarta.inject.Inject;
 import jakarta.inject.Provider;
 import picocli.CommandLine;
 import picocli.CommandLine.Parameters;
 import picocli.CommandLine.Spec;
 
-import java.net.URI;
-import java.util.ArrayList;
-import java.util.List;
-
 @CommandLine.Command(
     name = "uninstall",
-    description = "uninstall a plugin"
+    description = "Uninstall plugins"
 )
 public class PluginUninstallCommand extends AbstractCommand {
-    @Parameters(index = "0..*", description = "the plugins to uninstall")
+    @Parameters(index = "0..*", description = "The plugins to uninstall. Represented as Maven artifact coordinates (i.e., <groupId>:<artifactId>:(<version>|LATEST)")
     List<String> dependencies = new ArrayList<>();
 
     @Spec

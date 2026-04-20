@@ -1,16 +1,15 @@
 package io.kestra.core.validations;
 
-import io.kestra.core.models.validations.ModelValidator;
-import io.micronaut.core.annotation.Introspected;
+import org.junit.jupiter.api.Test;
+
 import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.models.validations.ModelValidator;
+
 import jakarta.inject.Inject;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
-import org.junit.jupiter.api.Test;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.is;
+import static org.assertj.core.api.Assertions.assertThat;
 
 @KestraTest
 class RegexTest {
@@ -18,7 +17,6 @@ class RegexTest {
     private ModelValidator modelValidator;
 
     @AllArgsConstructor
-    @Introspected
     @Getter
     public static class RegexCls {
         @Regex
@@ -29,11 +27,11 @@ class RegexTest {
     void inputValidation() {
         final RegexCls validRegex = new RegexCls("[A-Z]+");
 
-        assertThat(modelValidator.isValid(validRegex).isEmpty(), is(true));
+        assertThat(modelValidator.isValid(validRegex).isEmpty()).isTrue();
 
         final RegexCls invalidRegex = new RegexCls("\\");
 
-        assertThat(modelValidator.isValid(invalidRegex).isPresent(), is(true));
-        assertThat(modelValidator.isValid(invalidRegex).get().getMessage(), containsString("invalid pattern"));
+        assertThat(modelValidator.isValid(invalidRegex).isPresent()).isTrue();
+        assertThat(modelValidator.isValid(invalidRegex).get().getMessage()).contains("invalid pattern");
     }
 }

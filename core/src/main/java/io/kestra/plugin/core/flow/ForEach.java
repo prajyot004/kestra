@@ -1,5 +1,8 @@
 package io.kestra.plugin.core.flow;
 
+import java.util.List;
+import java.util.Optional;
+
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.models.annotations.Example;
 import io.kestra.core.models.annotations.Plugin;
@@ -16,15 +19,12 @@ import io.kestra.core.models.tasks.VoidOutput;
 import io.kestra.core.runners.FlowableUtils;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.utils.GraphUtils;
-import io.kestra.core.utils.ListUtils;
+
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
-
-import java.util.List;
-import java.util.Optional;
 
 @SuperBuilder
 @ToString
@@ -32,27 +32,13 @@ import java.util.Optional;
 @Getter
 @NoArgsConstructor
 @Schema(
-    title = "Execute a group of tasks for each value in the list.",
+    title = "Execute child tasks for each value in a list.",
     description = """
-        You can control how many task groups are executed concurrently by setting the `concurrencyLimit` property. \
+        Renders `values` (JSON array, YAML list, or expression) and runs the child task group once per item. The current item is available as `taskrun.value` (or `parent.taskrun.value` in nested loops); `taskrun.iteration` exposes the index.
 
-        - If you set the `concurrencyLimit` property to `0`, Kestra will execute all task groups concurrently for all values. \
+        Control parallelism with `concurrencyLimit` (0 = unlimited, 1 = fully serialized, N = up to N concurrent task groups). To run tasks inside each group in parallel, wrap them in a `Parallel` task.
 
-        - If you set the `concurrencyLimit` property to `1`, Kestra will execute each task group one after the other starting with the task group for the first value in the list. \
-
-
-        Regardless of the `concurrencyLimit` property, the `tasks` will run one after the other — to run those in parallel, wrap them in a [Parallel](https://kestra.io/plugins/core/tasks/flow/io.kestra.plugin.core.flow.parallel) task as shown in the last example below (_see the flow `parallel_tasks_example`_). \
-
-
-        The `values` should be defined as a JSON string or an array, e.g. a list of string values `["value1", "value2"]` or a list of key-value pairs `[{"key": "value1"}, {"key": "value2"}]`.\s
-
-
-        You can access the current iteration value using the variable `{{ taskrun.value }}` \
-        or `{{ parent.taskrun.value }}` if you are in a nested child task. You can access the batch or iteration number with `{{ taskrun.iteration }}`. \
-
-
-        If you need to execute more than 2-5 tasks for each value, we recommend triggering a subflow for each value for better performance and modularity. \
-        Check the [flow best practices documentation](https://kestra.io/docs/best-practices/flows) for more details."""
+        For large fan-out, consider triggering subflows per item for better scaling."""
 )
 @Plugin(
     examples = {
@@ -200,9 +186,9 @@ public class ForEach extends Sequential implements FlowableTask<VoidOutput> {
     @NotNull
     @PluginProperty(dynamic = true)
     @Schema(
-        title = "The list of values for which Kestra will execute a group of tasks.",
+        title = "The list of values for which Kestra will execute a group of tasks",
         description = "The values can be passed as a string, a list of strings, or a list of objects.",
-        oneOf = {String.class, Object[].class}
+        oneOf = { String.class, Object[].class }
     )
     private Object values;
 
@@ -210,12 +196,14 @@ public class ForEach extends Sequential implements FlowableTask<VoidOutput> {
     @NotNull
     @Builder.Default
     @Schema(
-        title = "The number of concurrent task groups for each value in the `values` array.",
+        title = "The number of concurrent task groups for each value in the `values` array",
         description = """
-        If you set the `concurrencyLimit` property to 0, Kestra will execute all task groups concurrently for all values (zero limits!). \
+            A `concurrencyLimit` of 0 means no limit — all task groups run in parallel.
 
+            A `concurrencyLimit` of 1 means full serialization — only one task group runs at a time, in order.
 
-        If you set the `concurrencyLimit` property to 1, Kestra will execute each task group one after the other starting with the first value in the list (limit concurrency to one task group that can be actively running at any time)."""
+            A `concurrencyLimit` greater than 1 allows up to the specified number of task groups to run in parallel.
+            """
     )
     @PluginProperty
     private final Integer concurrencyLimit = 1;
@@ -224,25 +212,16 @@ public class ForEach extends Sequential implements FlowableTask<VoidOutput> {
     public GraphCluster tasksTree(Execution execution, TaskRun taskRun, List<String> parentValues) throws IllegalVariableEvaluationException {
         GraphCluster subGraph = new GraphCluster(this, taskRun, parentValues, RelationType.DYNAMIC);
 
-        if (concurrencyLimit == 1) {
-            GraphUtils.sequential(
-                subGraph,
-                this.getTasks(),
-                this.getErrors(),
-                this.getFinally(),
-                taskRun,
-                execution
-            );
-        } else {
-            GraphUtils.parallel(
-                subGraph,
-                this.getTasks(),
-                this.errors,
-                this._finally,
-                taskRun,
-                execution
-            );
-        }
+        // ForEach executes task groups concurrently, not the task inside the group concurrently,
+        // so the topology should display it as a sequential.
+        GraphUtils.sequential(
+            subGraph,
+            this.getTasks(),
+            this.getErrors(),
+            this.getFinally(),
+            taskRun,
+            execution
+        );
 
         return subGraph;
     }
@@ -254,15 +233,9 @@ public class ForEach extends Sequential implements FlowableTask<VoidOutput> {
 
     @Override
     public Optional<State.Type> resolveState(RunContext runContext, Execution execution, TaskRun parentTaskRun) throws IllegalVariableEvaluationException {
-        List<ResolvedTask> childTasks = ListUtils.emptyOnNull(this.childTasks(runContext, parentTaskRun)).stream()
-            .filter(resolvedTask -> !resolvedTask.getTask().getDisabled())
-            .toList();
+        List<ResolvedTask> childTasks = this.childTasks(runContext, parentTaskRun);
 
-        if (childTasks.isEmpty()) {
-            return Optional.of(State.Type.SUCCESS);
-        }
-
-        return FlowableUtils.resolveState(
+        return FlowableUtils.resolveSequentialState(
             execution,
             childTasks,
             FlowableUtils.resolveTasks(this.getErrors(), parentTaskRun),

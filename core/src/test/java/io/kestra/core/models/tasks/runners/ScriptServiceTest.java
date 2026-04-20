@@ -1,17 +1,5 @@
 package io.kestra.core.models.tasks.runners;
 
-import io.kestra.core.exceptions.IllegalVariableEvaluationException;
-import io.kestra.core.models.executions.Execution;
-import io.kestra.core.models.executions.TaskRun;
-import io.kestra.core.models.flows.Flow;
-import io.kestra.core.models.flows.State;
-import io.kestra.core.models.tasks.Task;
-import io.kestra.core.runners.RunContext;
-import io.kestra.core.runners.RunContextFactory;
-import io.kestra.core.junit.annotations.KestraTest;
-import jakarta.inject.Inject;
-import org.junit.jupiter.api.Test;
-
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
@@ -21,27 +9,43 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.junit.jupiter.api.Test;
+
+import io.kestra.core.context.TestRunContextFactory;
+import io.kestra.core.exceptions.IllegalVariableEvaluationException;
+import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.models.executions.Execution;
+import io.kestra.core.models.executions.TaskRun;
+import io.kestra.core.models.flows.Flow;
+import io.kestra.core.models.flows.State;
+import io.kestra.core.models.tasks.Task;
+import io.kestra.core.runners.RunContext;
+import io.kestra.core.runners.RunContextFactory;
+import io.kestra.core.utils.IdUtils;
+
+import jakarta.inject.Inject;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
 
 @KestraTest
 class ScriptServiceTest {
     public static final Pattern COMMAND_PATTERN_CAPTURE_LOCAL_PATH = Pattern.compile("my command with an internal storage file: (.*)");
-    @Inject private RunContextFactory runContextFactory;
+    @Inject
+    private TestRunContextFactory runContextFactory;
 
     @Test
     void replaceInternalStorage() throws IOException {
-        var runContext = runContextFactory.of();
-        var command  = ScriptService.replaceInternalStorage(runContext, null, false);
-        assertThat(command, is(""));
+        String tenant = IdUtils.create();
+        var runContext = runContextFactory.of("id", "namespace", tenant);
+        var command = ScriptService.replaceInternalStorage(runContext, null, false);
+        assertThat(command).isEqualTo("");
 
         command = ScriptService.replaceInternalStorage(runContext, "my command", false);
-        assertThat(command, is("my command"));
+        assertThat(command).isEqualTo("my command");
 
-        Path path = Path.of("/tmp/unittest/file.txt");
-        if (!path.toFile().exists()) {
-            Files.createFile(path);
-        }
+        Path path = createFile(tenant, "file");
 
         String internalStorageUri = "kestra://some/file.txt";
         File localFile = null;
@@ -49,17 +53,40 @@ class ScriptServiceTest {
             command = ScriptService.replaceInternalStorage(runContext, "my command with an internal storage file: " + internalStorageUri, false);
 
             Matcher matcher = COMMAND_PATTERN_CAPTURE_LOCAL_PATH.matcher(command);
-            assertThat(matcher.matches(), is(true));
+            assertThat(matcher.matches()).isTrue();
             Path absoluteLocalFilePath = Path.of(matcher.group(1));
             localFile = absoluteLocalFilePath.toFile();
-            assertThat(localFile.exists(), is(true));
+            assertThat(localFile.exists()).isTrue();
 
             command = ScriptService.replaceInternalStorage(runContext, "my command with an internal storage file: " + internalStorageUri, true);
             matcher = COMMAND_PATTERN_CAPTURE_LOCAL_PATH.matcher(command);
-            assertThat(matcher.matches(), is(true));
+            assertThat(matcher.matches()).isTrue();
             String relativePath = matcher.group(1);
-            assertThat(relativePath, not(startsWith("/")));
-            assertThat(runContext.workingDir().resolve(Path.of(relativePath)).toFile().exists(), is(true));
+            assertThat(relativePath).doesNotStartWith("/");
+            assertThat(runContext.workingDir().resolve(Path.of(relativePath)).toFile().exists()).isTrue();
+        } finally {
+            localFile.delete();
+            path.toFile().delete();
+        }
+    }
+
+    @Test
+    void replaceInternalStorageUnicode() throws IOException {
+        String tenant = IdUtils.create();
+        var runContext = runContextFactory.of("id", "namespace", tenant);
+
+        Path path = createFile(tenant, "file-龍");
+
+        String internalStorageUri = "kestra://some/file-龍.txt";
+        File localFile = null;
+        try {
+            var command = ScriptService.replaceInternalStorage(runContext, "my command with an internal storage file: " + internalStorageUri, false);
+
+            Matcher matcher = COMMAND_PATTERN_CAPTURE_LOCAL_PATH.matcher(command);
+            assertThat(matcher.matches()).isTrue();
+            Path absoluteLocalFilePath = Path.of(matcher.group(1));
+            localFile = absoluteLocalFilePath.toFile();
+            assertThat(localFile.exists()).isTrue();
         } finally {
             localFile.delete();
             path.toFile().delete();
@@ -68,12 +95,10 @@ class ScriptServiceTest {
 
     @Test
     void uploadInputFiles() throws IOException {
-        var runContext = runContextFactory.of();
+        String tenant = IdUtils.create();
+        var runContext = runContextFactory.of("id", "namespace", tenant);
 
-        Path path = Path.of("/tmp/unittest/file.txt");
-        if (!path.toFile().exists()) {
-            Files.createFile(path);
-        }
+        Path path = createFile(tenant, "file");
 
         List<File> filesToDelete = new ArrayList<>();
         String internalStorageUri = "kestra://some/file.txt";
@@ -89,22 +114,22 @@ class ScriptServiceTest {
                 ),
                 false
             );
-            assertThat(commands, not(empty()));
+            assertThat(commands).isNotEmpty();
 
             assertThat(commands.getFirst(), not(is("my command with an internal storage file: " + internalStorageUri)));
             Matcher matcher = COMMAND_PATTERN_CAPTURE_LOCAL_PATH.matcher(commands.getFirst());
-            assertThat(matcher.matches(), is(true));
+            assertThat(matcher.matches()).isTrue();
             File file = Path.of(matcher.group(1)).toFile();
-            assertThat(file.exists(), is(true));
+            assertThat(file.exists()).isTrue();
             filesToDelete.add(file);
 
-            assertThat(commands.get(1), is("my command with some additional var usage: " + wdir));
+            assertThat(commands.get(1)).isEqualTo("my command with some additional var usage: " + wdir);
 
             commands = ScriptService.replaceInternalStorage(runContext, Collections.emptyMap(), List.of("my command with an internal storage file: " + internalStorageUri), true);
             matcher = COMMAND_PATTERN_CAPTURE_LOCAL_PATH.matcher(commands.getFirst());
-            assertThat(matcher.matches(), is(true));
+            assertThat(matcher.matches()).isTrue();
             file = runContext.workingDir().resolve(Path.of(matcher.group(1))).toFile();
-            assertThat(file.exists(), is(true));
+            assertThat(file.exists()).isTrue();
             filesToDelete.add(file);
         } catch (IllegalVariableEvaluationException e) {
             throw new RuntimeException(e);
@@ -116,15 +141,13 @@ class ScriptServiceTest {
 
     @Test
     void uploadOutputFiles() throws IOException {
-        var runContext = runContextFactory.of();
-        Path path = Path.of("/tmp/unittest/file.txt");
-        if (!path.toFile().exists()) {
-            Files.createFile(path);
-        }
+        String tenant = IdUtils.create();
+        var runContext = runContextFactory.of("id", "namespace", tenant);
+        Path path = createFile(tenant, "file");
 
-        var outputFiles = ScriptService.uploadOutputFiles(runContext, Path.of("/tmp/unittest"));
+        var outputFiles = ScriptService.uploadOutputFiles(runContext, Path.of("/tmp/unittest/%s".formatted(tenant)));
         assertThat(outputFiles, not(anEmptyMap()));
-        assertThat(outputFiles.get("file.txt"), is(URI.create("kestra:///file.txt")));
+        assertThat(outputFiles.get("file.txt")).isEqualTo(URI.create("kestra:///file.txt"));
 
         path.toFile().delete();
     }
@@ -132,9 +155,9 @@ class ScriptServiceTest {
     @Test
     void scriptCommands() {
         var scriptCommands = ScriptService.scriptCommands(List.of("interpreter"), List.of("beforeCommand"), List.of("command"));
-        assertThat(scriptCommands, hasSize(2));
-        assertThat(scriptCommands.getFirst(), is("interpreter"));
-        assertThat(scriptCommands.get(1), is("beforeCommand\ncommand"));
+        assertThat(scriptCommands).hasSize(2);
+        assertThat(scriptCommands.getFirst()).isEqualTo("interpreter");
+        assertThat(scriptCommands.get(1)).isEqualTo("beforeCommand\ncommand");
     }
 
     @Test
@@ -142,42 +165,65 @@ class ScriptServiceTest {
         var runContext = runContext(runContextFactory, "very.very.very.very.very.very.very.very.very.very.very.very.long.namespace");
 
         var labels = ScriptService.labels(runContext, "kestra.io/");
-        assertThat(labels.size(), is(6));
-        assertThat(labels.get("kestra.io/namespace"), is("very.very.very.very.very.very.very.very.very.very.very.very.lon"));
-        assertThat(labels.get("kestra.io/flow-id"), is("flowId"));
-        assertThat(labels.get("kestra.io/task-id"), is("task"));
-        assertThat(labels.get("kestra.io/execution-id"), is("executionId"));
-        assertThat(labels.get("kestra.io/taskrun-id"), is("taskrun"));
-        assertThat(labels.get("kestra.io/taskrun-attempt"), is("0"));
+        assertThat(labels.size()).isEqualTo(6);
+        assertThat(labels.get("kestra.io/namespace")).isEqualTo("very.very.very.very.very.very.very.very.very.very.very.very.lon");
+        assertThat(labels.get("kestra.io/flow-id")).isEqualTo("flowId");
+        assertThat(labels.get("kestra.io/task-id")).isEqualTo("task");
+        assertThat(labels.get("kestra.io/execution-id")).isEqualTo("executionId");
+        assertThat(labels.get("kestra.io/taskrun-id")).isEqualTo("taskrun");
+        assertThat(labels.get("kestra.io/taskrun-attempt")).isEqualTo("0");
 
         labels = ScriptService.labels(runContext, null, true, true);
-        assertThat(labels.size(), is(6));
-        assertThat(labels.get("namespace"), is("very.very.very.very.very.very.very.very.very.very.very.very.lon"));
-        assertThat(labels.get("flow-id"), is("flowid"));
-        assertThat(labels.get("task-id"), is("task"));
-        assertThat(labels.get("execution-id"), is("executionid"));
-        assertThat(labels.get("taskrun-id"), is("taskrun"));
-        assertThat(labels.get("taskrun-attempt"), is("0"));
+        assertThat(labels.size()).isEqualTo(6);
+        assertThat(labels.get("namespace")).isEqualTo("very.very.very.very.very.very.very.very.very.very.very.very.lon");
+        assertThat(labels.get("flow-id")).isEqualTo("flowid");
+        assertThat(labels.get("task-id")).isEqualTo("task");
+        assertThat(labels.get("execution-id")).isEqualTo("executionid");
+        assertThat(labels.get("taskrun-id")).isEqualTo("taskrun");
+        assertThat(labels.get("taskrun-attempt")).isEqualTo("0");
     }
 
     @Test
     void jobName() {
         var runContext = runContext(runContextFactory, "namespace");
         String jobName = ScriptService.jobName(runContext);
-        assertThat(jobName, startsWith("namespace-flowid-task-"));
-        assertThat(jobName.length(), is(27));
+        assertThat(jobName).startsWith("namespace-flowid-task-");
+        // base name "namespace-flowid-task" is 21 chars. Plus 1 hyphen and 8 char suffix.
+        assertThat(jobName.length()).isEqualTo(30);
+        assertThat(jobName.substring(jobName.lastIndexOf('-') + 1).length()).isEqualTo(8);
 
         runContext = runContext(runContextFactory, "very.very.very.very.very.very.very.very.very.very.very.very.long.namespace");
         jobName = ScriptService.jobName(runContext);
-        assertThat(jobName, startsWith("veryveryveryveryveryveryveryveryveryveryveryverylongnames-"));
-        assertThat(jobName.length(), is(63));
+
+        // Assert total length is max 63
+        assertThat(jobName.length()).isEqualTo(63);
+
+        // Assert the suffix is 8 chars long
+        String suffix = jobName.substring(jobName.lastIndexOf("-") + 1);
+        assertThat(suffix.length()).isEqualTo(8);
+
+        // Assert the base name part is 54 chars long (63 total - 8 suffix - 1 hyphen)
+        String baseName = jobName.substring(0, jobName.lastIndexOf("-"));
+        assertThat(baseName.length()).isEqualTo(54);
+
+        // Assert the truncated prefix is correct
+        assertThat(baseName).startsWith("veryveryveryveryveryveryveryveryveryveryveryverylong");
     }
 
     @Test
     void normalize() {
-        assertThat(ScriptService.normalize(null), nullValue());
-        assertThat(ScriptService.normalize("a-normal-string"), is("a-normal-string"));
-        assertThat(ScriptService.normalize("very.very.very.very.very.very.very.very.very.very.very.very.long.namespace"), is("very.very.very.very.very.very.very.very.very.very.very.very.lon"));
+        assertThat(ScriptService.normalize(null)).isNull();
+        assertThat(ScriptService.normalize("a-normal-string")).isEqualTo("a-normal-string");
+        assertThat(ScriptService.normalize("very.very.very.very.very.very.very.very.very.very.very.very.long.namespace"))
+            .isEqualTo("very.very.very.very.very.very.very.very.very.very.very.very.lon");
+
+        // new tests for the fix
+        assertThat(ScriptService.normalize("abc-_")).isEqualTo("abc");
+        assertThat(ScriptService.normalize("abc.-")).isEqualTo("abc");
+        assertThat(ScriptService.normalize("abc_-")).isEqualTo("abc");
+        assertThat(ScriptService.normalize("abc-._")).isEqualTo("abc");
+        assertThat(ScriptService.normalize("abc---")).isEqualTo("abc");
+        assertThat(ScriptService.normalize("a-b-c-")).isEqualTo("a-b-c");
     }
 
     private RunContext runContext(RunContextFactory runContextFactory, String namespace) {
@@ -204,5 +250,14 @@ class ScriptServiceTest {
             .state(new State().withState(State.Type.RUNNING))
             .build();
         return runContextFactory.of(flow, task, execution, taskRun);
+    }
+
+    private static Path createFile(String tenant, String fileName) throws IOException {
+        Path path = Path.of("/tmp/unittest/%s/%s.txt".formatted(tenant, fileName));
+        if (!path.toFile().exists()) {
+            Files.createDirectory(Path.of("/tmp/unittest/%s".formatted(tenant)));
+            Files.createFile(path);
+        }
+        return path;
     }
 }

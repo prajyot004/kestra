@@ -3,14 +3,19 @@
         <img
             v-bind="$attrs"
             :alt="alt"
-            :src="$store.getters['doc/resourceUrl'](src)"
+            :src="finalUrl"
             loading="lazy"
         >
     </span>
 </template>
 
 <script setup lang="ts">
-    defineProps({
+    import {useDocStore} from "../../stores/doc";
+    import {computed} from "vue";
+    
+    const docStore = useDocStore();
+
+    const props = defineProps({
         src: {
             type: String,
             default: ""
@@ -31,10 +36,13 @@
             type: String,
             default: ""
         }
-    })
+    });
+
+    const rawDocUrl = computed(() => docStore.resourceUrl(props.src)!);
+    const finalUrl = computed(() => docStore.docPath ? rawDocUrl.value.replace("/./", "/" + docStore.docPath + "/") : rawDocUrl.value);
 </script>
 
-<style lang="scss" scoped>
+<style scoped lang="scss">
     img {
         max-width: 100%;
     }

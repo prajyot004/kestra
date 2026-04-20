@@ -1,11 +1,20 @@
 package io.kestra.core.utils;
 
-import jakarta.validation.constraints.NotNull;
-
 import java.util.*;
 
-@SuppressWarnings({"rawtypes", "unchecked"})
+import jakarta.validation.constraints.NotNull;
+import lombok.extern.slf4j.Slf4j;
+
+@SuppressWarnings({ "unchecked" })
+@Slf4j
 public class MapUtils {
+    private static final String CONFLICT_AT_KEY_MSG = "Conflict at key: '{}', ignoring it. Map keys are: {}";
+
+    /**
+     * Merge map a with map b.
+     * 
+     * @see #deepMerge(Map, Map) that perform a deep merge which is more costly but safer for some use cases.
+     */
     public static Map<String, Object> merge(Map<String, Object> a, Map<String, Object> b) {
         if (a == null && b == null) {
             return null;
@@ -19,86 +28,113 @@ public class MapUtils {
             return a;
         }
 
-        Map copy = copyMap(a);
+        Map<String, Object> result = LinkedHashMap.newLinkedHashMap(Math.max(a.size(), b.size()));
+        result.putAll(a);
 
-        Map<String, Object> copyMap = b
-            .entrySet()
-            .stream()
-            .collect(
-                () -> HashMap.newHashMap(copy.size()),
-                (m, v) -> {
-                    Object original = copy.get(v.getKey());
-                    Object value = v.getValue();
-                    Object found;
+        for (Map.Entry<String, Object> entry : b.entrySet()) {
+            String key = entry.getKey();
+            Object valueB = entry.getValue();
+            Object valueA = result.get(key);
+            Object mergedValue;
+            if (valueB == null) {
+                mergedValue = valueA;
+            } else if (valueA == null) {
+                mergedValue = valueB;
+            } else if (valueA instanceof Map<?, ?> mapA && valueB instanceof Map<?, ?> mapB) {
+                mergedValue = merge(castMap(mapA), castMap(mapB));
+            } else if (valueA instanceof Collection<?> colA && valueB instanceof Collection<?> colB) {
+                mergedValue = mergeCollections(colA, colB);
+            } else {
+                mergedValue = valueB;
+            }
 
-                    if (value == null) {
-                        found = original;
-                    } else if (original == null) {
-                        found = value;
-                    } else if (value instanceof Map mapValue && original instanceof Map mapOriginal) {
-                        found = merge(mapOriginal, mapValue);
-                    } else if (value instanceof Collection collectionValue
-                        && original instanceof Collection collectionOriginal) {
-                        found = mergeCollections(collectionOriginal, collectionValue);
-                    } else {
-                        found = value;
-                    }
+            result.put(key, mergedValue);
+        }
 
-                    m.put(v.getKey(), found);
-                },
-                HashMap::putAll
-            );
-
-        copy.putAll(copyMap);
-
-        return copy;
+        return result;
     }
 
-    private static Collection mergeCollections(Collection collectionOriginal, Collection collectionValue) {
-        List<?> newList = new ArrayList<>(collectionOriginal.size() + collectionValue.size());
-        newList.addAll(collectionOriginal);
-        newList.addAll(collectionValue);
-        return newList;
+    /**
+     * Merge map a with map b, deep cloning maps and lists.
+     *
+     * @see #merge(Map, Map) that didn't deepclone and performs better.
+     */
+    public static Map<String, Object> deepMerge(Map<String, Object> a, Map<String, Object> b) {
+        if (a == null && b == null) {
+            return null;
+        }
+
+        if (a == null || a.isEmpty()) {
+            return b;
+        }
+
+        if (b == null || b.isEmpty()) {
+            return a;
+        }
+
+        Map<String, Object> result = LinkedHashMap.newLinkedHashMap(Math.max(a.size(), b.size()));
+        result.putAll(deepCloneMap(a));
+
+        for (Map.Entry<String, Object> entry : b.entrySet()) {
+            String key = entry.getKey();
+            Object valueB = entry.getValue();
+            Object valueA = result.get(key);
+
+            Object mergedValue = mergeValues(valueA, valueB);
+
+            result.put(key, mergedValue);
+        }
+
+        return result;
     }
 
-    private static Map copyMap(Map original) {
-        return ((Map<?, ?>) original)
-            .entrySet()
-            .stream()
-            .collect(
-                () -> HashMap.newHashMap(original.size()),
-                (map, entry) -> {
-                    Object value = entry.getValue();
-                    Object found;
-
-                    if (value instanceof Map mapValue) {
-                        found = cloneMap(mapValue);
-                    } else if (value instanceof Collection collectionValue) {
-                        found = cloneCollection(collectionValue);
-                    } else {
-                        found = value;
-                    }
-
-                    map.put(entry.getKey(), found);
-
-                },
-                Map::putAll
-            );
+    private static Object mergeValues(Object valueA, Object valueB) {
+        Object mergedValue;
+        if (valueB == null) {
+            mergedValue = valueA;
+        } else if (valueA == null) {
+            mergedValue = valueB;
+        } else if (valueA instanceof Map<?, ?> mapA && valueB instanceof Map<?, ?> mapB) {
+            mergedValue = deepMerge(castMap(mapA), castMap(mapB));
+        } else if (valueA instanceof Collection<?> colA && valueB instanceof Collection<?> colB) {
+            mergedValue = mergeCollections(colA, colB);
+        } else {
+            mergedValue = valueB;
+        }
+        return mergedValue;
     }
 
-    private static Map cloneMap(Map elements) {
-        try {
-            Map newInstance = elements.getClass().getDeclaredConstructor().newInstance();
-            newInstance.putAll(elements);
-            return newInstance;
-        } catch (Exception e) {
-            return new HashMap(elements);
+    private static Map<String, Object> deepCloneMap(Map<String, Object> original) {
+        Map<String, Object> cloned = LinkedHashMap.newLinkedHashMap(original.size());
+        for (Map.Entry<String, Object> entry : original.entrySet()) {
+            cloned.put(entry.getKey(), deepClone(entry.getValue()));
+        }
+        return cloned;
+    }
+
+    private static Object deepClone(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            return deepCloneMap(castMap(map));
+        } else if (value instanceof Collection<?> col) {
+            return cloneCollection(col);
+        } else {
+            return value;
         }
     }
 
-    private static Collection cloneCollection(Collection elements) {
+    private static Collection<?> mergeCollections(Collection<?> colA, Collection<?> colB) {
+        List<Object> merged = new ArrayList<>(colA.size() + colB.size());
+        merged.addAll(colA);
+        if (!colB.isEmpty()) {
+            List<?> filtered = colB.stream().filter(it -> !colA.contains(it)).toList();
+            merged.addAll(filtered);
+        }
+        return merged;
+    }
+
+    private static Collection<?> cloneCollection(Collection<?> elements) {
         try {
-            Collection newInstance = elements.getClass().getDeclaredConstructor().newInstance();
+            Collection<Object> newInstance = elements.getClass().getDeclaredConstructor().newInstance();
             newInstance.addAll(elements);
             return newInstance;
         } catch (Exception e) {
@@ -106,18 +142,29 @@ public class MapUtils {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> castMap(Map<?, ?> map) {
+        return (Map<String, Object>) map;
+    }
+
     /**
      * Utility method for merging multiple {@link Map}s that can contains nullable values.
-     * Note that the maps provided are assumed to be flat, so this method does not perform a recursive merge.
      *
-     * @param maps  The Map to be merged.
-     * @return     the merged Map.
+     * @param maps The Map to be merged.
+     * @return the merged Map.
      */
-    public static Map<String, Object> mergeWithNullableValues(final Map<String, Object>...maps) {
+    @SafeVarargs
+    public static Map<String, Object> mergeWithNullableValues(final Map<String, Object>... maps) {
         return Arrays.stream(maps)
             .flatMap(map -> map.entrySet().stream())
             // https://bugs.openjdk.org/browse/JDK-8148463
-            .collect(HashMap::new, (m, v) -> m.put(v.getKey(), v.getValue()), HashMap::putAll);
+            .collect(HashMap::new, (m, v) ->
+            {
+                Object mergedValue = m.compute(v.getKey(), (k, existing) -> mergeValues(existing, v.getValue()));
+                if (mergedValue == null) {
+                    m.put(v.getKey(), null);
+                }
+            }, HashMap::putAll);
     }
 
     /**
@@ -136,15 +183,15 @@ public class MapUtils {
     }
 
     /**
-     * Utility method nested a flatten map.
+     * Utility method that nests a flattened map.
      *
-     * @param flatMap the flatten map.
+     * @param flatMap the flattened map.
      * @return the nested map.
      *
      * @throws IllegalArgumentException if the given map contains conflicting keys.
      */
     public static Map<String, Object> flattenToNestedMap(@NotNull Map<String, ?> flatMap) {
-        Map<String, Object> result = new TreeMap<>();
+        Map<String, Object> result = new HashMap<>();
 
         for (Map.Entry<String, ?> entry : flatMap.entrySet()) {
             String[] keys = entry.getKey().split("\\.");
@@ -156,16 +203,54 @@ public class MapUtils {
                     currentMap.put(key, new HashMap<>());
                 } else if (!(currentMap.get(key) instanceof Map)) {
                     var invalidKey = String.join(",", Arrays.copyOfRange(keys, 0, i));
-                    throw new IllegalArgumentException("Conflict at key: '" + invalidKey + "'. Map keys are: " + flatMap.keySet());
+                    log.warn(CONFLICT_AT_KEY_MSG, invalidKey, flatMap.keySet());
+                    continue;
                 }
                 currentMap = (Map<String, Object>) currentMap.get(key);
             }
             String lastKey = keys[keys.length - 1];
             if (currentMap.containsKey(lastKey)) {
-                throw new IllegalArgumentException("Conflict at key: '" + lastKey + "', Map keys are: " + flatMap.keySet());
+                log.warn("Conflict at key: '{}', ignoring it. Map keys are: {}", lastKey, flatMap.keySet());
+                continue;
             }
             currentMap.put(lastKey, entry.getValue());
         }
+        return result;
+    }
+
+    /**
+     * Utility method that flatten a nested map.
+     *
+     * @param nestedMap the nested map.
+     * @return the flattened map.
+     */
+    public static Map<String, Object> nestedToFlattenMap(@NotNull Map<String, Object> nestedMap) {
+        Map<String, Object> result = new HashMap<>();
+
+        for (Map.Entry<String, Object> entry : nestedMap.entrySet()) {
+            if (entry.getValue() instanceof Map<?, ?> map) {
+                Map<String, Object> flatten = flattenEntry(entry.getKey(), (Map<String, Object>) map);
+                result.putAll(flatten);
+            } else {
+                result.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return result;
+    }
+
+    private static Map<String, Object> flattenEntry(String key, Map<String, Object> value) {
+        Map<String, Object> result = new HashMap<>();
+
+        for (Map.Entry<String, Object> entry : value.entrySet()) {
+            String newKey = key + "." + entry.getKey();
+            Object newValue = entry.getValue();
+            if (newValue instanceof Map<?, ?> map) {
+                result.putAll(flattenEntry(newKey, (Map<String, Object>) map));
+            } else {
+                result.put(newKey, newValue);
+            }
+        }
+
         return result;
     }
 }

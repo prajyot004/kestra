@@ -1,0 +1,80 @@
+package io.kestra.core.reporter.reports;
+
+import java.time.Instant;
+import java.util.Objects;
+
+import io.kestra.core.models.ServerType;
+import io.kestra.core.models.collectors.ExecutionUsage;
+import io.kestra.core.models.collectors.FlowUsage;
+import io.kestra.core.reporter.AbstractReportable;
+import io.kestra.core.reporter.Schedules;
+import io.kestra.core.reporter.Types;
+import io.kestra.core.reporter.model.Count;
+import io.kestra.core.repositories.DashboardRepositoryInterface;
+import io.kestra.core.repositories.ExecutionRepositoryInterface;
+import io.kestra.core.repositories.FlowRepositoryInterface;
+
+import io.micronaut.context.annotation.Requires;
+import io.micronaut.context.annotation.Value;
+import jakarta.inject.Inject;
+import jakarta.inject.Singleton;
+import lombok.Getter;
+import lombok.experimental.SuperBuilder;
+import lombok.extern.jackson.Jacksonized;
+
+@Singleton
+@Requires(property = "kestra.server-type", pattern = "STANDALONE|EXECUTOR|WEBSERVER")
+public class FeatureUsageReport extends AbstractReportable<FeatureUsageReport.UsageEvent> {
+
+    private final FlowRepositoryInterface flowRepository;
+    private final ExecutionRepositoryInterface executionRepository;
+    private final DashboardRepositoryInterface dashboardRepository;
+    private final ServerType serverType;
+
+    @Inject
+    public FeatureUsageReport(FlowRepositoryInterface flowRepository,
+        ExecutionRepositoryInterface executionRepository,
+        DashboardRepositoryInterface dashboardRepository,
+        @Value("${kestra.server-type}") ServerType serverType) {
+        super(Types.USAGE, Schedules.hourly(), true);
+        this.flowRepository = flowRepository;
+        this.executionRepository = executionRepository;
+        this.dashboardRepository = dashboardRepository;
+        this.serverType = serverType;
+    }
+
+    @Override
+    public boolean isEnabled() {
+        return serverType.equals(ServerType.EXECUTOR) || serverType.equals(ServerType.STANDALONE);
+    }
+
+    @Override
+    public UsageEvent report(final Instant now, TimeInterval interval) {
+        return UsageEvent
+            .builder()
+            .flows(FlowUsage.of(flowRepository))
+            .executions(ExecutionUsage.of(executionRepository, interval.from(), interval.to()))
+            .dashboards(new Count(dashboardRepository.countAllForAllTenants()))
+            .build();
+    }
+
+    @Override
+    public UsageEvent report(Instant now, TimeInterval interval, String tenant) {
+        Objects.requireNonNull(tenant, "tenant is null");
+        Objects.requireNonNull(interval, "interval is null");
+        return UsageEvent
+            .builder()
+            .flows(FlowUsage.of(tenant, flowRepository))
+            .executions(ExecutionUsage.of(tenant, executionRepository, interval.from(), interval.to()))
+            .build();
+    }
+
+    @SuperBuilder(toBuilder = true)
+    @Getter
+    @Jacksonized
+    public static class UsageEvent implements Event {
+        private ExecutionUsage executions;
+        private FlowUsage flows;
+        private Count dashboards;
+    }
+}

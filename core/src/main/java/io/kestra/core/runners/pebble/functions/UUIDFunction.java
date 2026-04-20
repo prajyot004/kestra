@@ -1,22 +1,32 @@
 package io.kestra.core.runners.pebble.functions;
 
-import io.pebbletemplates.pebble.extension.Function;
-import io.pebbletemplates.pebble.template.EvaluationContext;
-import io.pebbletemplates.pebble.template.PebbleTemplate;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
-public class UUIDFunction implements Function {
+import com.fasterxml.uuid.Generators;
+import com.fasterxml.uuid.impl.TimeBasedEpochRandomGenerator;
 
-  @Override
-  public Object execute(
-      Map<String, Object> args, PebbleTemplate self, EvaluationContext context, int lineNumber) {
-    return UUID.randomUUID().toString();
-  }
+import io.pebbletemplates.pebble.template.EvaluationContext;
+import io.pebbletemplates.pebble.template.PebbleTemplate;
 
-  @Override
-  public List<String> getArgumentNames() {
-    return List.of();
-  }
+public class UUIDFunction implements KestraFunction {
+    public static final String NAME = "uuid";
+
+    private static final TimeBasedEpochRandomGenerator generator = Generators.timeBasedEpochRandomGenerator();
+
+    @Override
+    public Object execute(
+        Map<String, Object> args, PebbleTemplate self, EvaluationContext context, int lineNumber) {
+        return generator.generate().toString();
+    }
+
+    @Override
+    public List<String> getArgumentNames() {
+        return List.of();
+    }
+
+    @Override
+    public Map<String, String> getArgumentDefaults() {
+        return Map.of();
+    }
 }

@@ -1,16 +1,6 @@
 package io.kestra.repository.mysql;
 
-import io.kestra.jdbc.repository.AbstractJdbcExecutionRepositoryTest;
-import org.junit.jupiter.api.Test;
+import io.kestra.core.repositories.AbstractExecutionRepositoryTest;
 
-public class MysqlExecutionRepositoryTest extends AbstractJdbcExecutionRepositoryTest {
-    @Test
-    protected void findTaskRun() {
-
-    }
-
-    @Test
-    protected void taskRunsDailyStatistics() {
-
-    }
+public class MysqlExecutionRepositoryTest extends AbstractExecutionRepositoryTest {
 }

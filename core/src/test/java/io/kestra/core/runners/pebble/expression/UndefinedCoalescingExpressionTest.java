@@ -1,16 +1,17 @@
 package io.kestra.core.runners.pebble.expression;
 
-import io.kestra.core.exceptions.IllegalVariableEvaluationException;
-import io.kestra.core.junit.annotations.KestraTest;
-import io.kestra.core.runners.VariableRenderer;
-import jakarta.inject.Inject;
-import org.junit.jupiter.api.Test;
-
 import java.util.HashMap;
 import java.util.Map;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import org.junit.jupiter.api.Test;
+
+import io.kestra.core.exceptions.IllegalVariableEvaluationException;
+import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.runners.VariableRenderer;
+
+import jakarta.inject.Inject;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 @KestraTest
 class UndefinedCoalescingExpressionTest {
@@ -24,10 +25,10 @@ class UndefinedCoalescingExpressionTest {
 
         String render = variableRenderer.render("{{ null ??? 'IS NULL' }}", vars);
 
-        assertThat(render, is(""));
+        assertThat(render).isEqualTo("");
 
         render = variableRenderer.render("{{ undefined ??? 'IS UNDEFINED' }}", vars);
 
-        assertThat(render, is("IS UNDEFINED"));
+        assertThat(render).isEqualTo("IS UNDEFINED");
     }
 }

@@ -1,14 +1,5 @@
 package io.kestra.plugin.core.storage;
 
-import com.google.common.io.CharStreams;
-import io.kestra.core.models.property.Property;
-import io.kestra.core.serializers.JacksonMapper;
-import io.kestra.core.junit.annotations.KestraTest;
-import org.junit.jupiter.api.Test;
-import io.kestra.core.runners.RunContext;
-import io.kestra.core.runners.RunContextFactory;
-import io.kestra.core.storages.StorageInterface;
-
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStreamReader;
@@ -17,11 +8,23 @@ import java.net.URL;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+
+import org.junit.jupiter.api.Test;
+
+import com.google.common.io.CharStreams;
+
+import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.models.property.Property;
+import io.kestra.core.runners.RunContext;
+import io.kestra.core.runners.RunContextFactory;
+import io.kestra.core.serializers.JacksonMapper;
+import io.kestra.core.storages.StorageInterface;
+import io.kestra.core.utils.IdUtils;
+
 import jakarta.inject.Inject;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.endsWith;
-import static org.hamcrest.Matchers.is;
+import static io.kestra.core.tenant.TenantService.MAIN_TENANT;
+import static org.assertj.core.api.Assertions.assertThat;
 
 @KestraTest
 class ConcatTest {
@@ -35,14 +38,18 @@ class ConcatTest {
         RunContext runContext = runContextFactory.of();
         URL resource = ConcatTest.class.getClassLoader().getResource("application-test.yml");
 
-        File file = new File(Objects.requireNonNull(ConcatTest.class.getClassLoader()
-            .getResource("application-test.yml"))
-            .toURI());
+        File file = new File(
+            Objects.requireNonNull(
+                ConcatTest.class.getClassLoader()
+                    .getResource("application-test.yml")
+            )
+                .toURI()
+        );
 
         URI put = storageInterface.put(
+            MAIN_TENANT,
             null,
-            null,
-            new URI("/file/storage/get.yml"),
+            new URI("/file/storage/get-%s.yml".formatted(IdUtils.create())),
             new FileInputStream(Objects.requireNonNull(resource).getFile())
         );
 
@@ -50,19 +57,15 @@ class ConcatTest {
 
         Concat result = Concat.builder()
             .files(json ? JacksonMapper.ofJson().writeValueAsString(files) : files)
-            .separator(Property.of("\n"))
-            .extension(Property.of(".yml"))
+            .separator(Property.ofValue("\n"))
+            .extension(Property.ofValue(".yml"))
             .build();
 
         Concat.Output run = result.run(runContext);
         String s = CharStreams.toString(new InputStreamReader(new FileInputStream(file)));
 
-
-        assertThat(
-            CharStreams.toString(new InputStreamReader(storageInterface.get(null, null, run.getUri()))),
-            is(s + "\n" + s + "\n")
-        );
-        assertThat(run.getUri().getPath(), endsWith(".yml"));
+        assertThat(CharStreams.toString(new InputStreamReader(storageInterface.get(MAIN_TENANT, null, run.getUri())))).isEqualTo(s + "\n" + s + "\n");
+        assertThat(run.getUri().getPath()).endsWith(".yml");
     }
 
     @Test

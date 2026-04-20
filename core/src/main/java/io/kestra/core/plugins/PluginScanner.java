@@ -1,25 +1,11 @@
 package io.kestra.core.plugins;
 
-import io.kestra.core.app.AppBlockInterface;
-import io.kestra.core.app.AppPluginInterface;
-import io.kestra.core.models.Plugin;
-import io.kestra.core.models.conditions.Condition;
-import io.kestra.core.models.dashboards.DataFilter;
-import io.kestra.core.models.dashboards.charts.Chart;
-import io.kestra.core.models.tasks.Task;
-import io.kestra.core.models.tasks.logs.LogExporter;
-import io.kestra.core.models.tasks.runners.TaskRunner;
-import io.kestra.core.models.triggers.AbstractTrigger;
-import io.kestra.core.secret.SecretPluginInterface;
-import io.kestra.core.storages.StorageInterface;
-import io.swagger.v3.oas.annotations.Hidden;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.io.IOUtils;
-
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystemNotFoundException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -29,9 +15,38 @@ import java.util.jar.JarFile;
 import java.util.jar.Manifest;
 import java.util.stream.Collectors;
 
+import org.apache.commons.io.IOUtils;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+
+import io.kestra.core.app.AppBlockInterface;
+import io.kestra.core.app.AppPluginInterface;
+import io.kestra.core.models.Plugin;
+import io.kestra.core.models.assets.Asset;
+import io.kestra.core.models.assets.AssetExporter;
+import io.kestra.core.models.conditions.Condition;
+import io.kestra.core.models.dashboards.DataFilter;
+import io.kestra.core.models.dashboards.DataFilterKPI;
+import io.kestra.core.models.dashboards.charts.Chart;
+import io.kestra.core.models.tasks.Task;
+import io.kestra.core.models.tasks.logs.LogExporter;
+import io.kestra.core.models.tasks.runners.TaskRunner;
+import io.kestra.core.models.triggers.AbstractTrigger;
+import io.kestra.core.models.ui.PluginUiModule;
+import io.kestra.core.secret.SecretPluginInterface;
+import io.kestra.core.serializers.JacksonMapper;
+import io.kestra.core.storages.StorageInterface;
+
+import io.swagger.v3.oas.annotations.Hidden;
+import lombok.extern.slf4j.Slf4j;
+
 @Slf4j
 public class PluginScanner {
     ClassLoader parent;
+
+    private static final String UI_MANIFEST_PATH = "plugin-ui/manifest.json";
+    private static final TypeReference<Map<String, List<PluginUiModule>>> PLUGIN_UI_MANIFEST_TYPE = new TypeReference<>() {
+    };
 
     public PluginScanner(final ClassLoader parent) {
         this.parent = parent;
@@ -47,7 +62,8 @@ public class PluginScanner {
         List<RegisteredPlugin> scanResult = new PluginResolver(pluginPaths)
             .resolves()
             .parallelStream()
-            .map(plugin -> {
+            .map(plugin ->
+            {
                 log.debug("Loading plugins from path: {}", plugin.getLocation());
 
                 final PluginClassLoader classLoader = PluginClassLoader.of(
@@ -78,13 +94,16 @@ public class PluginScanner {
     public RegisteredPlugin scan() {
         try {
             long start = System.currentTimeMillis();
-            Manifest manifest = new Manifest(IOUtils.toInputStream("""
-                    Manifest-Version: 1.0
-                    X-Kestra-Title: core
-                    X-Kestra-Group: io.kestra.plugin.core
-                    """,
-                StandardCharsets.UTF_8
-            ));
+            Manifest manifest = new Manifest(
+                IOUtils.toInputStream(
+                    """
+                        Manifest-Version: 1.0
+                        X-Kestra-Title: core
+                        X-Kestra-Group: io.kestra.plugin.core
+                        """,
+                    StandardCharsets.UTF_8
+                )
+            );
 
             RegisteredPlugin corePlugin = scanClassLoader(PluginScanner.class.getClassLoader(), null, manifest);
             log.info("Registered {} core plugins (scan done in {}ms)", corePlugin.allClass().size(), System.currentTimeMillis() - start);
@@ -97,21 +116,26 @@ public class PluginScanner {
 
     @SuppressWarnings("unchecked")
     private RegisteredPlugin scanClassLoader(final ClassLoader classLoader,
-                                             final ExternalPlugin externalPlugin,
-                                             Manifest manifest) {
+        final ExternalPlugin externalPlugin,
+        Manifest manifest) {
         List<Class<? extends Task>> tasks = new ArrayList<>();
         List<Class<? extends AbstractTrigger>> triggers = new ArrayList<>();
         List<Class<? extends Condition>> conditions = new ArrayList<>();
         List<Class<? extends StorageInterface>> storages = new ArrayList<>();
         List<Class<? extends SecretPluginInterface>> secrets = new ArrayList<>();
         List<Class<? extends TaskRunner<?>>> taskRunners = new ArrayList<>();
+        List<Class<? extends Asset>> assets = new ArrayList<>();
+        List<Class<? extends AssetExporter<?>>> assetExporters = new ArrayList<>();
         List<Class<? extends AppPluginInterface>> apps = new ArrayList<>();
         List<Class<? extends AppBlockInterface>> appBlocks = new ArrayList<>();
         List<Class<? extends Chart<?>>> charts = new ArrayList<>();
         List<Class<? extends DataFilter<?, ?>>> dataFilters = new ArrayList<>();
+        List<Class<? extends DataFilterKPI<?, ?>>> dataFiltersKPI = new ArrayList<>();
         List<Class<? extends LogExporter<?>>> logExporter = new ArrayList<>();
+        List<Class<? extends AdditionalPlugin>> additionalPlugins = new ArrayList<>();
         List<String> guides = new ArrayList<>();
         Map<String, Class<?>> aliases = new HashMap<>();
+        Map<String, List<PluginUiModule>> pluginUiManifest = new HashMap<>();
 
         if (manifest == null) {
             manifest = getManifest(classLoader);
@@ -150,6 +174,15 @@ public class PluginScanner {
                         //noinspection unchecked
                         taskRunners.add((Class<? extends TaskRunner<?>>) runner.getClass());
                     }
+                    case Asset asset -> {
+                        log.debug("Loading Asset plugin: '{}'", plugin.getClass());
+                        assets.add(asset.getClass());
+                    }
+                    case AssetExporter<?> assetExporter -> {
+                        log.debug("Loading AssetExporter plugin: '{}'", plugin.getClass());
+                        //noinspection unchecked
+                        assetExporters.add((Class<? extends AssetExporter<?>>) assetExporter.getClass());
+                    }
                     case AppPluginInterface app -> {
                         log.debug("Loading App plugin: '{}'", plugin.getClass());
                         apps.add(app.getClass());
@@ -166,11 +199,20 @@ public class PluginScanner {
                     case DataFilter<?, ?> dataFilter -> {
                         log.debug("Loading DataFilter plugin: '{}'", plugin.getClass());
                         //noinspection unchecked
-                        dataFilters.add((Class<? extends DataFilter<?, ?>>)  dataFilter.getClass());
+                        dataFilters.add((Class<? extends DataFilter<?, ?>>) dataFilter.getClass());
+                    }
+                    case DataFilterKPI<?, ?> dataFilterKPI -> {
+                        log.debug("Loading DataFilterKPI plugin: '{}'", plugin.getClass());
+                        //noinspection unchecked
+                        dataFiltersKPI.add((Class<? extends DataFilterKPI<?, ?>>) dataFilterKPI.getClass());
                     }
                     case LogExporter<?> shipper -> {
                         log.debug("Loading LogExporter plugin: '{}'", plugin.getClass());
-                        logExporter.add((Class<? extends LogExporter<?>>)  shipper.getClass());
+                        logExporter.add((Class<? extends LogExporter<?>>) shipper.getClass());
+                    }
+                    case AdditionalPlugin additionalPlugin -> {
+                        log.debug("Loading additional plugin: '{}'", plugin.getClass());
+                        additionalPlugins.add(additionalPlugin.getClass());
                     }
                     default -> {
                     }
@@ -179,8 +221,9 @@ public class PluginScanner {
                 Plugin.getAliases(plugin.getClass()).forEach(alias -> aliases.put(alias, plugin.getClass()));
             }
         } catch (ServiceConfigurationError | NoClassDefFoundError e) {
-            Object location = externalPlugin != null ? externalPlugin.getLocation() : "core";
-            log.error("Unable to load all plugin classes from '{}'. Cause: [{}] {}",
+            Object location = getLocation(externalPlugin);
+            log.error(
+                "Unable to load all plugin classes from '{}'. Cause: [{}] {}",
                 location,
                 e.getClass().getSimpleName(),
                 e.getMessage(),
@@ -190,20 +233,22 @@ public class PluginScanner {
 
         var guidesDirectory = classLoader.getResource("doc/guides");
         if (guidesDirectory != null) {
-            try (var fileSystem = FileSystems.newFileSystem(guidesDirectory.toURI(), Collections.emptyMap())) {
-                var root = fileSystem.getPath("/doc/guides");
-                try (var stream = Files.walk(root, 1)) {
-                    stream
-                        .skip(1) // first element is the root element
-                        .sorted(Comparator.comparing(path -> path.getName(path.getParent().getNameCount()).toString()))
-                        .forEach(guide -> {
-                            var guideName = guide.getName(guide.getParent().getNameCount()).toString();
-                            guides.add(guideName.substring(0, guideName.lastIndexOf('.')));
-                        });
-                }
+            try {
+                var root = Path.of(guidesDirectory.toURI());
+                addGuides(root, guides);
             } catch (IOException | URISyntaxException e) {
                 // silently fail
+            } catch (FileSystemNotFoundException e) {
+                addGuidesThroughNewFileSystem(guidesDirectory, guides);
             }
+        }
+
+        try (InputStream in = classLoader.getResourceAsStream(UI_MANIFEST_PATH)) {
+            if (in != null) {
+                pluginUiManifest.putAll(JacksonMapper.ofJson().readValue(in, PLUGIN_UI_MANIFEST_TYPE));
+            }
+        } catch (IOException e) {
+            log.error("Unable to read plugin ui manifest for plugin {}", getLocation(externalPlugin));
         }
 
         return RegisteredPlugin.builder()
@@ -215,18 +260,54 @@ public class PluginScanner {
             .conditions(conditions)
             .storages(storages)
             .secrets(secrets)
+            .assets(assets)
+            .assetExporters(assetExporters)
             .apps(apps)
             .appBlocks(appBlocks)
             .taskRunners(taskRunners)
             .charts(charts)
             .dataFilters(dataFilters)
+            .dataFiltersKPI(dataFiltersKPI)
             .guides(guides)
             .logExporters(logExporter)
-            .aliases(aliases.entrySet().stream().collect(Collectors.toMap(
-                e -> e.getKey().toLowerCase(),
-                Function.identity()
-            )))
+            .additionalPlugins(additionalPlugins)
+            .aliases(
+                aliases.entrySet().stream().collect(
+                    Collectors.toMap(
+                        e -> e.getKey().toLowerCase(),
+                        Function.identity()
+                    )
+                )
+            )
+            .pluginUiManifest(pluginUiManifest)
             .build();
+    }
+
+    private static Object getLocation(ExternalPlugin externalPlugin) {
+        Object location = externalPlugin != null ? externalPlugin.getLocation() : "core";
+        return location;
+    }
+
+    private static void addGuidesThroughNewFileSystem(URL guidesDirectory, List<String> guides) {
+        try (var fileSystem = FileSystems.newFileSystem(guidesDirectory.toURI(), Collections.emptyMap())) {
+            var root = fileSystem.getPath("doc/guides");
+            addGuides(root, guides);
+        } catch (IOException | URISyntaxException e) {
+            // silently fail
+        }
+    }
+
+    private static void addGuides(Path root, List<String> guides) throws IOException {
+        try (var stream = Files.walk(root)) { // remove depth limit to walk recursively
+            stream
+                .filter(Files::isRegularFile)
+                .sorted(Comparator.comparing(path -> path.getName(path.getParent().getNameCount()).toString()))
+                .forEach(guide ->
+                {
+                    var guideName = guide.getName(guide.getParent().getNameCount()).toString();
+                    guides.add(guideName.substring(0, guideName.lastIndexOf('.')));
+                });
+        }
     }
 
     public static Manifest getManifest(ClassLoader classLoader) {

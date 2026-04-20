@@ -1,7 +1,7 @@
 package io.kestra.repository.mysql;
 
-import io.kestra.jdbc.repository.AbstractJdbcSettingRepositoryTest;
+import io.kestra.core.repositories.AbstractSettingRepositoryTest;
 
-public class MysqlSettingRepositoryTest extends AbstractJdbcSettingRepositoryTest {
+public class MysqlSettingRepositoryTest extends AbstractSettingRepositoryTest {
 
 }

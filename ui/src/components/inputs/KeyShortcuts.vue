@@ -1,15 +1,5 @@
 <template>
-    <el-tooltip
-        :content="$t('editor_shortcuts.label')"
-        :hide-after="0"
-        :persistent="false"
-        effect="light"
-        placement="top"
-    >
-        <Keyboard @click="isShown = true" class="keyboard" />
-    </el-tooltip>
-
-    <el-dialog v-model="isShown" top="25vh" header-class="p-3" body-class="p-2">
+    <el-dialog v-model="isKeyShortcutsDialogShown" top="25vh" headerClass="p-3" bodyClass="p-2">
         <template #header>
             <div class="d-flex align-items-center gap-2 fw-normal">
                 <el-icon :size="30">
@@ -44,15 +34,15 @@
     </el-dialog>
 </template>
 
-<script setup>
-    import {ref} from "vue";
+<script setup lang="ts">
     import Keyboard from "vue-material-design-icons/Keyboard.vue";
+    import {useKeyShortcuts} from "../../utils/useKeyShortcuts";
 
-    const isShown = ref(false);
+    const {isKeyShortcutsDialogShown} = useKeyShortcuts();
 
     const commands = [
         {
-            keys: ["⌘ Cmd/Ctrl", "SPACE"],
+            keys: ["Ctrl", "SPACE"],
             description: "editor_shortcuts.trigger_autocompletion",
         },
         {
@@ -62,6 +52,14 @@
         {
             keys: ["⌘ Cmd/Ctrl", "s"],
             description: "editor_shortcuts.save_flow",
+        },
+        {
+            keys: ["⌘ Cmd/Ctrl", "e"],
+            description: "editor_shortcuts.execute_flow",
+        },
+        {
+            keys: ["⌘ Cmd/Ctrl", "⌥ Option/Alt", "Shift", "K"],
+            description: "editor_shortcuts.toggle_ai_agent",
         },
         {
             keys: ["⌥ Option/Alt", "↑", "↓"],
@@ -103,11 +101,6 @@
 </script>
 
 <style scoped lang="scss">
-.keyboard {
-    color: var(--ks-content-secondary);
-    cursor: pointer;
-}
-
 .el-tag {
     background-color: var(--ks-tag-background);
     color: var(--ks-tag-content);

@@ -1,15 +1,19 @@
 package io.kestra.core.validations;
 
-import io.kestra.core.models.flows.Type;
-import io.kestra.core.models.flows.input.StringInput;
-import io.kestra.core.models.validations.ModelValidator;
-import io.kestra.core.junit.annotations.KestraTest;
-import jakarta.inject.Inject;
+import java.net.URI;
+
 import org.junit.jupiter.api.Test;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.nullValue;
+import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.models.flows.Type;
+import io.kestra.core.models.flows.input.FileInput;
+import io.kestra.core.models.flows.input.StringInput;
+import io.kestra.core.models.property.Property;
+import io.kestra.core.models.validations.ModelValidator;
+
+import jakarta.inject.Inject;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 @KestraTest
 class InputTest {
@@ -24,29 +28,28 @@ class InputTest {
             .validator("[A-Z]+")
             .build();
 
-        assertThat(modelValidator.isValid(validInput).isEmpty(), is(true));
+        assertThat(modelValidator.isValid(validInput).isEmpty()).isTrue();
     }
 
-    @SuppressWarnings("deprecation")
     @Test
-    void inputNameDeprecation() {
-        String id = "test";
-        StringInput validInput = StringInput.builder()
-            .id(id)
-            .type(Type.STRING)
+    void shouldFailFileInputWithDefault() {
+        var fileInput = FileInput.builder()
+            .id("test")
+            .type(Type.FILE)
+            .defaults(Property.ofValue(URI.create("http://some.uri")))
             .build();
 
-        assertThat(validInput.getId(), is(id));
-        assertThat(validInput.getName(), nullValue());
+        assertThat(modelValidator.isValid(fileInput)).isPresent();
+    }
 
-        String newName = "newName";
-        validInput = StringInput.builder()
-            .type(Type.STRING)
+    @Test
+    void shouldValidateFileInputWithFileDefault() {
+        var fileInput = FileInput.builder()
+            .id("test")
+            .type(Type.FILE)
+            .defaults(Property.ofValue(URI.create("file:///tmp.file.txt")))
             .build();
 
-        validInput.setName(newName);
-
-        assertThat(validInput.getName(), is(newName));
-        assertThat(validInput.getId(), is(newName));
+        assertThat(modelValidator.isValid(fileInput)).isEmpty();
     }
 }

@@ -1,198 +1,422 @@
-import {useI18n} from "vue-i18n";
+import {ref, watch, computed} from "vue";
+import {useRoute, useRouter} from "vue-router";
+import {
+    keyOfComparator,
+    decodeSearchParams,
+    encodeFiltersToQuery,
+    isValidFilter,
+    getUniqueFilters,
+    clearFilterQueryParams
+} from "../utils/helpers";
+import {
+    AppliedFilter,
+    FilterConfiguration,
+    FilterKeyConfig,
+    COMPARATOR_LABELS,
+    Comparators,
+    TEXT_COMPARATORS,
+} from "../utils/filterTypes";
+import {usePreAppliedFilters} from "./usePreAppliedFilters";
+import {applyDefaultFilters, useDefaultFilter} from "./useDefaultFilter";
 
-import {Comparator, Option} from "../utils/types";
+export function useFilters(
+    configuration: FilterConfiguration,
+    showSearchInput = true,
+    defaultScope?: boolean,
+    defaultTimeRange?: boolean,
+    defaultDuration?: string,
+) {
+    const router = useRouter();
+    const route = useRoute();
 
-import * as ICONS from "../utils/icons";
+    const appliedFilters = ref<AppliedFilter[]>([]);
+    const searchQuery = ref("");
+    const dismissedDefaultVisibleKeys = ref<Set<string>>(new Set());
 
-const getItem = (key: string) => {
-    return JSON.parse(localStorage.getItem(key) || "[]");
-};
+    const {
+        markAsPreApplied,
+        hasPreApplied,
+        getPreApplied
+    } = usePreAppliedFilters();
 
-const setItem = (key: string, value: object) => {
-    return localStorage.setItem(key, JSON.stringify(value));
-};
+    const isDefaultVisibleKey = (key: string) =>
+        configuration.keys?.some((k) => k.key === key && k.visibleByDefault) ?? false;
 
-export const compare = (item: object, element: object) => {
-    return JSON.stringify(item) !== JSON.stringify(element);
-};
+    const dismissDefaultVisibleKey = (key: string) => {
+        if (!isDefaultVisibleKey(key)) {
+            return;
+        }
 
-const filterItems = (items: object[], element: object) => {
-    return items.filter((item) => compare(item, element));
-};
-
-const buildComparator = (label: string, value: string, multiple: boolean = false): Comparator => {
-    return {label, value, multiple};
-};
-
-export function useFilters(prefix: string) {
-    const {t} = useI18n({useScope: "global"});
-
-    const comparator = (which: string) => `filters.comparators.${which}`;
-    const COMPARATORS: Record<string, Comparator> = {
-        EQUALS: buildComparator(t(comparator("is")), "$eq"),
-        NOT_EQUALS: buildComparator(t(comparator("is_not")), "$ne"),
-        CONTAINS: buildComparator(t(comparator("contains")), "$contains", true),
-        STARTS_WITH: buildComparator(t(comparator("starts_with")), "$startsWith"),
-        ENDS_WITH: buildComparator(t(comparator("ends_with")), "$endsWith"),
-        IN: buildComparator(t(comparator("in")), "$in", true),
-        NOT_IN: buildComparator(t(comparator("not_in")), "$notIn", true),
-        BETWEEN: buildComparator(t(comparator("between")), "$between"),
-        GREATER_THAN: buildComparator(t(comparator("greater_than")), "$gt"),
-        LESS_THAN: buildComparator(t(comparator("less_than")), "$lt"),
+        const next = new Set(dismissedDefaultVisibleKeys.value);
+        next.add(key);
+        dismissedDefaultVisibleKeys.value = next;
     };
 
-    const OPTIONS: Option[] = [
-        {
-            key: "namespace",
-            icon: ICONS.DotsSquare,
-            label: t("filters.options.namespace"),
-            value: {label: "namespace", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS, COMPARATORS.NOT_EQUALS, COMPARATORS.STARTS_WITH,
-                COMPARATORS.ENDS_WITH, COMPARATORS.CONTAINS, COMPARATORS.IN, COMPARATORS.NOT_IN],
-        },
-        {
-            key: "state",
-            icon: ICONS.StateMachine,
-            label: t("filters.options.state"),
-            value: {label: "state", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS, COMPARATORS.NOT_EQUALS, COMPARATORS.IN, COMPARATORS.NOT_IN],
-        },
-        {
-            key: "trigger_state",
-            icon: ICONS.StateMachine,
-            label: t("filters.options.state"),
-            value: {label: "trigger_state", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS, COMPARATORS.NOT_EQUALS, COMPARATORS.IN, COMPARATORS.NOT_IN],
-        },
-        {
-            key: "scope",
-            icon: ICONS.FilterSettingsOutline,
-            label: t("filters.options.scope"),
-            value: {label: "scope", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS, COMPARATORS.NOT_EQUALS],
-        },
-        {
-            key: "childFilter",
-            icon: ICONS.FilterVariantMinus,
-            label: t("filters.options.child"),
-            value: {label: "child", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS, COMPARATORS.NOT_EQUALS],
-        },
-        {
-            key: "level",
-            icon: ICONS.MathLog,
-            label: t("filters.options.level"),
-            value: {label: "level", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS, COMPARATORS.NOT_EQUALS],
-        },
-        {
-            key: "task",
-            icon: ICONS.TimelineTextOutline,
-            label: t("filters.options.task"),
-            value: {label: "task", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS],
-        },
-        {
-            key: "metric",
-            icon: ICONS.ChartBar,
-            label: t("filters.options.metric"),
-            value: {label: "metric", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS],
-        },
-        {
-            key: "user",
-            icon: ICONS.AccountOutline,
-            label: t("filters.options.user"),
-            value: {label: "user", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS],
-        },
-        {
-            key: "details.cls",
-            icon: ICONS.FormatListBulletedType,
-            label: t("filters.options.type"),
-            value: {label: "type", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS],
-        },
-        {
-            key: "type",
-            icon: ICONS.FormatListBulletedType,
-            label: t("filters.options.type"),
-            value: {label: "service_type", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS],
-        },
-        {
-            key: "permission",
-            icon: ICONS.AccountCheck,
-            label: t("filters.options.permission"),
-            value: {label: "permission", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS],
-        },
-        {
-            key: "type",
-            icon: ICONS.GestureTapButton,
-            label: t("filters.options.action"),
-            value: {label: "action", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS],
-        },
-        {
-            key: "status",
-            icon: ICONS.StateMachine,
-            label: t("filters.options.status"),
-            value: {label: "status", comparator: undefined, value: []},
-            comparators: [COMPARATORS.IS],
-        },
-        {
-            key: "details",
-            icon: ICONS.TagOutline,
-            label: t("filters.options.details"),
-            value: {label: "details", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS],
-        },
-        {
-            key: "aggregation",
-            icon: ICONS.Sigma,
-            label: t("filters.options.aggregation"),
-            value: {label: "aggregation", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS]
-        },
-        {
-            key: "timeRange",
-            icon: ICONS.CalendarRangeOutline,
-            label: t("filters.options.relative_date"),
-            value: {label: "relative_date", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS, COMPARATORS.NOT_EQUALS]
-        },
-        {
-            key: "date",
-            icon: ICONS.CalendarEndOutline,
-            label: t("filters.options.absolute_date"),
-            value: {label: "absolute_date", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS]
-        },
-        {
-            key: "labels",
-            icon: ICONS.TagOutline,
-            label: t("filters.options.labels"),
-            value: {label: "labels", comparator: undefined, value: []},
-            comparators: [COMPARATORS.EQUALS, COMPARATORS.NOT_EQUALS],
-        },
-    ];
+    const restoreDefaultVisibleKey = (key: string) => {
+        if (!dismissedDefaultVisibleKeys.value.has(key)) {
+            return;
+        }
 
-    const keys = {saved: `saved__${prefix}`};
+        const next = new Set(dismissedDefaultVisibleKeys.value);
+        next.delete(key);
+        dismissedDefaultVisibleKeys.value = next;
+    };
+
+    const dismissAllDefaultVisibleKeys = () => {
+        dismissedDefaultVisibleKeys.value = new Set(
+            configuration.keys
+                ?.filter((key) => key.visibleByDefault)
+                .map((key) => key.key) ?? []
+        );
+    };
+
+    const resetDismissedDefaultVisibleKeys = () => {
+        dismissedDefaultVisibleKeys.value = new Set();
+    };
+
+    const hasDismissedDefaultVisibleKeys = computed(
+        () => dismissedDefaultVisibleKeys.value.size > 0
+    );
+
+    const updateSearchQuery = (query: Record<string, any>) => {
+        const trimmedQuery = searchQuery.value?.trim();
+        delete query.q;
+        delete query.search;
+        delete query["filters[q][EQUALS]"];
+
+        if (trimmedQuery && showSearchInput) {
+            query["filters[q][EQUALS]"] = trimmedQuery;
+        }
+    };
+
+    const hasValue = (filter: AppliedFilter): boolean => {
+        return (Array.isArray(filter.value) && filter.value.length > 0) ||
+            (!Array.isArray(filter.value) && filter.value !== "" && filter.value !== null && filter.value !== undefined);
+    };
+
+    const updateRoute = (shouldResetPage = false) => {
+        const query = {...route.query};
+        clearFilterQueryParams(query);
+
+        Object.assign(query, encodeFiltersToQuery(getUniqueFilters(appliedFilters.value
+            .filter(isValidFilter)), keyOfComparator));
+
+        updateSearchQuery(query);
+
+        if (shouldResetPage && parseInt(String(query.page ?? "1")) > 1) {
+            delete query.page;
+        }
+
+        router.push({query});
+    };
+
+    const createAppliedFilter = (
+        key: string,
+        config: any,
+        comparator: Comparators,
+        value: any,
+        valueLabel: string,
+        idSuffix: string
+    ): AppliedFilter => ({
+        id: `${key}-${idSuffix}-${Date.now()}`,
+        key,
+        keyLabel: config?.label,
+        comparator,
+        comparatorLabel: COMPARATOR_LABELS[comparator],
+        value,
+        valueLabel
+    });
+
+    const createTimeRangeFilter = (
+        config: any,
+        startDate: Date,
+        endDate: Date,
+        comparator = Comparators.EQUALS
+    ): AppliedFilter => {
+        return {
+            ...createAppliedFilter(
+                "timeRange",
+                config,
+                comparator,
+                {startDate, endDate},
+                `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`,
+                keyOfComparator(comparator)
+            ),
+            comparatorLabel: "Is Between"
+        };
+    };
+
+    const processFieldValue = (config: any, params: any[], _field: string, comparator: Comparators) => {
+        const isTextOp = TEXT_COMPARATORS.includes(comparator);
+
+        if (config?.valueType === "key-value") {
+            const combinedValue = params.map(p => p?.value as string);
+            return {
+                value: combinedValue,
+                valueLabel: combinedValue.length > 1
+                    ? `${combinedValue[0]} +${combinedValue.length - 1}`
+                    : combinedValue[0] ?? ""
+            };
+        }
+
+        if (config?.valueType === "multi-select" && !isTextOp) {
+            const combinedValue = params.flatMap(p =>
+                Array.isArray(p?.value) ? p.value : (p?.value as string)?.split(",") ?? []
+            );
+            return {
+                value: combinedValue,
+                valueLabel: combinedValue.join(", ")
+            };
+        }
+
+        let value = Array.isArray(params[0]?.value)
+            ? params[0].value[0]
+            : (params[0]?.value as string);
+
+        if (config?.valueType === "date" && typeof value === "string") {
+            value = new Date(value);
+        }
+
+        return {
+            value,
+            valueLabel: value instanceof Date ? value.toLocaleDateString() : value
+        };
+    };
+
+    const parseEncodedFilters = (): AppliedFilter[] => {
+        const filtersMap = new Map<string, AppliedFilter>();
+        const dateFilters: Record<string, {comparatorKey: string; value: string}> = {};
+        const fieldParams = new Map<string, any[]>();
+
+        decodeSearchParams(route.query).forEach(param => {
+            if (!param) return;
+            if (["startDate", "endDate"].includes(param?.field)) {
+                dateFilters[param.field] = {
+                    comparatorKey: param?.operation ?? "",
+                    value: param?.value as string
+                };
+            } else {
+                if (!fieldParams.has(param?.field)) fieldParams.set(param.field, []);
+                fieldParams.get(param?.field)!.push(param);
+            }
+        });
+
+        fieldParams.forEach((params, field) => {
+            const config = configuration.keys?.find(k => k?.key === field);
+            if (!config) return;
+
+            const parsedComparator = Comparators[params[0]?.operation as keyof typeof Comparators];
+            const comparator = config.comparators?.includes(parsedComparator)
+                ? parsedComparator
+                : undefined;
+            if (!comparator) return;
+
+            const {value, valueLabel} = processFieldValue(config, params, field, comparator);
+            filtersMap.set(
+                field,
+                createAppliedFilter(field, config, comparator, value, valueLabel, params[0]?.operation)
+            );
+        });
+
+        if (dateFilters.startDate && dateFilters.endDate) {
+            const timeRangeConfig = configuration.keys?.find(k => k?.key === "timeRange");
+            if (timeRangeConfig) {
+                const comparator = Comparators[
+                    dateFilters.startDate?.comparatorKey as keyof typeof Comparators
+                ];
+                filtersMap.set(
+                    "timeRange",
+                    createTimeRangeFilter(
+                        timeRangeConfig,
+                        new Date(dateFilters.startDate?.value),
+                        new Date(dateFilters.endDate?.value),
+                        comparator
+                    )
+                );
+            }
+        }
+
+        return Array.from(filtersMap.values());
+    };
+
+        /**
+        * Initialize default visible filters. These filters are marked with visibleByDefault: true
+        * and are automatically added to the filter list when the page loads, even if no value
+        * are present to filter. Users can remove them, but they will reappear on page refresh.
+        */
+
+    const resolveDefaultVisibleValue = (key: FilterKeyConfig): AppliedFilter["value"] => {
+        const value = typeof key.defaultValue === "function"
+            ? key.defaultValue()
+            : key.defaultValue;
+
+        if (value !== undefined) {
+            return value;
+        }
+
+        return key.valueType === "multi-select" ? [] : "";
+    };
+
+    const defaultVisibleValueLabel = (value: AppliedFilter["value"]) => {
+        if (Array.isArray(value)) {
+            return value.join(", ");
+        }
+
+        if (value && typeof value === "object" && "startDate" in value && "endDate" in value) {
+            return `${value.startDate.toLocaleDateString()} - ${value.endDate.toLocaleDateString()}`;
+        }
+
+        if (value instanceof Date) {
+            return value.toLocaleDateString();
+        }
+
+        return value?.toString?.() ?? "";
+    };
+
+    const createDefaultVisibleFilters = (
+        excludedKeys = new Set<string>(),
+        hiddenDefaultVisibleKeys = dismissedDefaultVisibleKeys.value
+    ) =>
+        configuration.keys
+            ?.filter(key =>
+                key.visibleByDefault &&
+                !excludedKeys.has(key.key) &&
+                !hiddenDefaultVisibleKeys.has(key.key)
+            )
+            .map(key => {
+                const comparator = (key.comparators?.[0] as Comparators) ?? Comparators.EQUALS;
+                const value = resolveDefaultVisibleValue(key);
+                const valueLabel = defaultVisibleValueLabel(value);
+                return {
+                    ...createAppliedFilter(key.key, key, comparator, value, valueLabel, "default"),
+                    isDefaultVisible: true
+                } as AppliedFilter;
+            }) ?? [];
+
+    const initializeFromRoute = () => {
+        if (showSearchInput) {
+            searchQuery.value = (route.query?.["filters[q][EQUALS]"] as string) ?? "";
+        }
+
+        const parsedFilters = parseEncodedFilters();
+
+        if (appliedFilters.value?.length === 0 && parsedFilters.length > 0) {
+            markAsPreApplied(parsedFilters);
+        }
+
+        const parsedFilterKeys = new Set(parsedFilters.map(f => f.key));
+        if (parsedFilterKeys.size > 0 && dismissedDefaultVisibleKeys.value.size > 0) {
+            const next = new Set(dismissedDefaultVisibleKeys.value);
+            parsedFilterKeys.forEach((key) => next.delete(key));
+            dismissedDefaultVisibleKeys.value = next;
+        }
+
+        appliedFilters.value = [
+            ...parsedFilters,
+            ...createDefaultVisibleFilters(parsedFilterKeys, dismissedDefaultVisibleKeys.value)
+        ];
+    };
+
+    watch(() => route.query, initializeFromRoute, {deep: true, immediate: false});
+    initializeFromRoute();
+
+    const addFilter = (filter: AppliedFilter) => {
+        restoreDefaultVisibleKey(filter.key);
+        const index = appliedFilters.value.findIndex(f => f?.key === filter?.key);
+        appliedFilters.value = index === -1
+            ? [...appliedFilters.value, filter]
+            : appliedFilters.value.map((f, i) => (i === index ? filter : f));
+        updateRoute(hasValue(filter));
+    };
+
+    const removeFilter = (filterId: string) => {
+        const filter = appliedFilters.value.find(f => f?.id === filterId);
+        if (filter) {
+            dismissDefaultVisibleKey(filter.key);
+            appliedFilters.value = appliedFilters.value.filter(f => f?.key !== filter?.key);
+            updateRoute(false);
+        }
+    };
+
+    const updateFilter = (updatedFilter: AppliedFilter) => {
+        restoreDefaultVisibleKey(updatedFilter.key);
+        appliedFilters.value = [
+            ...appliedFilters.value.filter(f => f?.key !== updatedFilter?.key),
+            updatedFilter
+        ];
+        updateRoute(hasValue(updatedFilter));
+    };
+
+    /**
+     * Clears all applied filters and search query.
+     */
+    const clearFilters = () => {
+        dismissAllDefaultVisibleKeys();
+        appliedFilters.value = [];
+        searchQuery.value = "";
+        updateRoute(true);
+    };
+
+    const defaultFilterOptions = {
+        namespace: configuration.keys?.some((k) => k.key === "namespace") ? undefined : null,
+        includeScope: defaultScope ?? configuration.keys?.some((k) => k.key === "scope"),
+        includeTimeRange: defaultTimeRange ?? configuration.keys?.some((k) => k.key === "timeRange"),
+        defaultDuration,
+    };
+    useDefaultFilter(defaultFilterOptions);
+
+    const resetToDefaults = () => {
+        resetDismissedDefaultVisibleKeys();
+
+        const {query: defaultQuery} = applyDefaultFilters({}, defaultFilterOptions);
+        const resetFilters: AppliedFilter[] = [];
+
+        // Append time range as first filter to preserve order
+        if (defaultFilterOptions.includeTimeRange) {
+            const timeRangeConfig = configuration.keys?.find((k) => k.key === "timeRange");
+            const timeRangeQueryKey = "filters[timeRange][EQUALS]";
+            const defaultTimeRange = defaultQuery[timeRangeQueryKey];
+            const timeRangeValue = Array.isArray(defaultTimeRange) ? defaultTimeRange[0] : defaultTimeRange;
+
+            if (timeRangeConfig && typeof timeRangeValue === "string" && timeRangeValue.length > 0) {
+                const comparator = (timeRangeConfig.comparators?.[0] as Comparators) ?? Comparators.EQUALS;
+                resetFilters.push(
+                    createAppliedFilter(
+                        "timeRange",
+                        timeRangeConfig,
+                        comparator,
+                        timeRangeValue,
+                        timeRangeValue,
+                        "default"
+                    )
+                );
+            }
+        }
+
+        resetFilters.push(...createDefaultVisibleFilters(new Set(), dismissedDefaultVisibleKeys.value));
+
+        const currentQuery = {...route.query};
+        clearFilterQueryParams(currentQuery);
+        delete currentQuery.page;
+
+        const query = {...currentQuery, ...defaultQuery};
+        router.replace({query}).then(() => appliedFilters.value = resetFilters);
+    };
+
+    watch(searchQuery, () => {
+        updateRoute(searchQuery.value.trim() !== "");
+    });
 
     return {
-        getSavedItems: () => {
-            return getItem(keys.saved);
-        },
-        setSavedItems: (value: object) => {
-            return setItem(keys.saved, value);
-        },
-        removeSavedItem: (element: object) => {
-            const filtered = filterItems(getItem(keys.saved), element);
-            return setItem(keys.saved, filtered);
-        },
-
-        COMPARATORS,
-        OPTIONS,
+        appliedFilters: computed(() => appliedFilters.value),
+        hasDismissedDefaultVisibleKeys,
+        searchQuery,
+        addFilter,
+        removeFilter,
+        updateFilter,
+        clearFilters,
+        resetToDefaults,
+        hasPreApplied,
+        getPreApplied,
     };
 }

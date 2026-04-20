@@ -1,16 +1,17 @@
 package io.kestra.core.runners.pebble.filters;
 
-import io.pebbletemplates.pebble.error.PebbleException;
-import io.pebbletemplates.pebble.extension.Filter;
-import io.pebbletemplates.pebble.template.EvaluationContext;
-import io.pebbletemplates.pebble.template.PebbleTemplate;
-import io.kestra.core.runners.pebble.AbstractDate;
-
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+
+import io.kestra.core.runners.pebble.AbstractDate;
+
+import io.pebbletemplates.pebble.error.PebbleException;
+import io.pebbletemplates.pebble.extension.Filter;
+import io.pebbletemplates.pebble.template.EvaluationContext;
+import io.pebbletemplates.pebble.template.PebbleTemplate;
 
 public class TimestampMicroFilter extends AbstractDate implements Filter {
     @Override
@@ -30,6 +31,6 @@ public class TimestampMicroFilter extends AbstractDate implements Filter {
         ZoneId zoneId = zoneId(timeZone);
         ZonedDateTime date = convert(input, zoneId, existingFormat);
 
-        return String.valueOf(TimeUnit.SECONDS.toNanos(date.toEpochSecond()) + TimeUnit.NANOSECONDS.toMicros(date.getNano()));
+        return String.valueOf(TimeUnit.SECONDS.toMicros(date.toEpochSecond()) + TimeUnit.NANOSECONDS.toMicros(date.getNano()));
     }
 }

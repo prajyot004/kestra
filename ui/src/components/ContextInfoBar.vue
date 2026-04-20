@@ -1,14 +1,12 @@
 <template>
-    <div class="barWrapper" :class="{opened: activeTab?.length > 0}">
-        <button v-if="activeTab.length" class="barResizer" ref="resizeHandle" @mousedown="startResizing" />
-
+    <div v-if="hasButtons && !activeTab.length" class="barWrapper">
         <el-button
-            v-for="(button, key) of buttonsList"
+            v-for="(button, key) of contextButtons"
             :key="key"
             :type="activeTab === key ? 'primary' : 'default'"
             :tag="button.url ? 'a' : 'button'"
             :href="button.url"
-            @click="() => {if(!button.url){ setActiveTab(key)}}"
+            @click="() => {if(!button.url){ setActiveTab(key as string)}}"
             :target="button.url ? '_blank' : undefined"
         >
             <component :is="button.icon" class="context-button-icon" />{{ button.title }}
@@ -22,148 +20,149 @@
             effect="light"
             :persistent="false"
             transition=""
-            :hide-after="0"
-            :disabled="!configs.commitId"
+            :hideAfter="0"
+            :disabled="!miscStore.configs?.commitId"
         >
             <template #content>
-                <code>{{ configs.commitId }}</code> <DateAgo v-if="configs.commitDate" :inverted="true" :date="configs.commitDate" />
+                <code>{{ miscStore.configs?.commitId }}</code> <DateAgo v-if="miscStore.configs?.commitDate" :inverted="true" :date="miscStore.configs.commitDate" />
             </template>
-            <span class="versionNumber">{{ configs?.version }}</span>
+            <span class="versionNumber">{{ miscStore.configs?.version }}</span>
         </el-tooltip>
         <el-button class="theme-switcher" @click="onSwitchTheme">
             <WeatherNight v-if="themeIsDark" />
             <WeatherSunny v-else />
         </el-button>
     </div>
-    <div class="panelWrapper" :class="{panelTabResizing: resizing}" :style="{width: activeTab?.length ? `${panelWidth}px` : 0}">
-        <div :style="{overflow: 'hidden'}">
-            <button v-if="activeTab.length" class="closeButton" @click="setActiveTab('')">
-                <Close />
-            </button>
-            <ContextDocs v-if="activeTab === 'docs'" />
-            <ContextNews v-else-if="activeTab === 'news'" />
-            <template v-else>
-                {{ activeTab }}
-            </template>
-        </div>
+
+    <div v-else-if="hasButtons" class="contextInfoSidebar" :style="{width: `${sidebarWidth}px`}">
+        <el-splitter
+            class="contextInfoSplitter"
+            :style="{width: `${maxSidebarWidth}px`}"
+        >
+            <el-splitter-panel class="contextInfoSpacerPanel" :min="0" />
+
+            <el-splitter-panel v-model:size="sidebarWidth" :min="minSidebarWidth" :max="maxSidebarWidth">
+                <div class="contextInfoContent">
+                    <div class="barWrapper opened">
+                        <el-button
+                            v-for="(button, key) of contextButtons"
+                            :key="key"
+                            :type="activeTab === key ? 'primary' : 'default'"
+                            :tag="button.url ? 'a' : 'button'"
+                            :href="button.url"
+                            @click="() => {if(!button.url){ setActiveTab(key as string)}}"
+                            :target="button.url ? '_blank' : undefined"
+                        >
+                            <component :is="button.icon" class="context-button-icon" />{{ button.title }}
+                            <OpenInNew v-if="button.url" class="open-in-new" />
+                            <div v-if="button.hasUnreadMarker === true && hasUnread" class="newsDot" />
+                        </el-button>
+
+                        <div style="flex:1" />
+
+                        <el-tooltip
+                            effect="light"
+                            :persistent="false"
+                            transition=""
+                            :hideAfter="0"
+                            :disabled="!miscStore.configs?.commitId"
+                        >
+                            <template #content>
+                                <code>{{ miscStore.configs?.commitId }}</code> <DateAgo v-if="miscStore.configs?.commitDate" :inverted="true" :date="miscStore.configs.commitDate" />
+                            </template>
+                            <span class="versionNumber">{{ miscStore.configs?.version }}</span>
+                        </el-tooltip>
+                        <el-button class="theme-switcher" @click="onSwitchTheme">
+                            <WeatherNight v-if="themeIsDark" />
+                            <WeatherSunny v-else />
+                        </el-button>
+                    </div>
+
+                    <div class="panelWrapper">
+                        <div :style="{overflow: 'hidden'}">
+                            <button v-if="activeTab.length" class="closeButton" @click="setActiveTab('')">
+                                <Close />
+                            </button>
+                            <KeepAlive v-if="activeTab">
+                                <ContextDocs v-if="activeTab === 'docs'" />
+                                <ContextNews v-else-if="activeTab === 'news'" />
+                                <template v-else>
+                                    {{ activeTab }}
+                                </template>
+                            </KeepAlive>
+                        </div>
+                    </div>
+                </div>
+            </el-splitter-panel>
+        </el-splitter>
     </div>
 </template>
 
-<script lang="ts" setup>
-    import {computed, ref, watch, type Ref, type Component} from "vue";
-    import {useMouse, watchThrottled} from "@vueuse/core"
+<script setup lang="ts">
+    import {computed, ref, watch, type Component, PropType} from "vue";
+    import {useStorage, useWindowSize} from "@vueuse/core"
     import ContextDocs from "./docs/ContextDocs.vue"
     import ContextNews from "./layout/ContextNews.vue"
     import DateAgo from "./layout/DateAgo.vue"
 
-    import MessageOutline from "vue-material-design-icons/MessageOutline.vue"
-    import FileDocument from "vue-material-design-icons/FileDocument.vue"
-    import Slack from "vue-material-design-icons/Slack.vue"
-    import Github from "vue-material-design-icons/Github.vue"
-    import Calendar from "vue-material-design-icons/Calendar.vue"
     import Close from "vue-material-design-icons/Close.vue"
     import OpenInNew from "vue-material-design-icons/OpenInNew.vue"
     import WeatherSunny from "vue-material-design-icons/WeatherSunny.vue"
     import WeatherNight from "vue-material-design-icons/WeatherNight.vue"
 
-    import {useStorage} from "@vueuse/core"
-    import {useStore} from "vuex";
-    import {useI18n} from "vue-i18n";
     import Utils from "../utils/utils";
+    import {useApiStore} from "../stores/api";
+    import {useMiscStore} from "override/stores/misc";
 
-    const {t} = useI18n({useScope: "global"});
+    import {useContextButtons} from "override/composables/contextButtons";
+    const {buttons} = useContextButtons();
 
-    const store = useStore();
+    const apiStore = useApiStore();
+    const miscStore = useMiscStore();
 
-    const configs = computed(() => store.getters["misc/configs"]);
-    const activeTab = computed(() => store.getters["misc/contextInfoBarOpenTab"])
+    const activeTab = computed(() => miscStore.contextInfoBarOpenTab)
+    const contextButtons = computed(() => ({...buttons, ...props.additionalButtons}))
+    const hasButtons = computed(() => Object.keys(contextButtons.value).length > 0)
 
     const lastNewsReadDate = useStorage<string | null>("feeds", null)
 
     const hasUnread = computed(() => {
-        const feeds = store.state.misc.feeds
+        const feeds = apiStore.feeds
         return (
             lastNewsReadDate.value === null ||
             (feeds?.[0] && (new Date(lastNewsReadDate.value) < new Date(feeds[0].publicationDate)))
         )
     })
 
-    const buttonsList: Record<string, {
-        title:string,
-        icon: Component,
-        component?: Component,
-        url?: string,
-        hasUnreadMarker?: boolean
-    }> = {
-        news: {
-            title: t("contextBar.news"),
-            icon: MessageOutline,
-            component: ContextNews,
-            hasUnreadMarker: true
-        },
-        docs: {
-            title: t("contextBar.docs"),
-            icon: FileDocument,
-            component: ContextDocs
-        },
-        help: {
-            title: t("contextBar.help"),
-            icon: Slack,
-            url: "https://kestra.io/slack"
-        },
-        issue: {
-            title: t("contextBar.issue"),
-            icon: Github,
-            url: "https://github.com/kestra-io/kestra/issues/new/choose"
-        },
-        demo: {
-            title: t("contextBar.demo"),
-            icon: Calendar,
-            url: "https://kestra.io/demo"
+    const props = defineProps({
+        additionalButtons: {
+            type: Object as PropType<Record<string, {
+                title: string;
+                icon?: Component;
+                url: string;
+                hasUnreadMarker: false;
+            }>>,
+            default: () => ({})
         }
-    }
+    });
 
-    const panelWidth = ref(640)
+    const BAR_WIDTH_PX = 64
+    const PANEL_MIN_WIDTH_PX = 50
 
-    const {startResizing, resizing} = useResizablePanel(activeTab)
+    const sidebarWidth = ref(704)
+    const {width: windowWidth} = useWindowSize()
+    const minSidebarWidth = BAR_WIDTH_PX + PANEL_MIN_WIDTH_PX
+    const maxSidebarWidth = computed(() => windowWidth.value * 0.5 + BAR_WIDTH_PX)
 
-    function useResizablePanel(localActiveTab: Ref<string>) {
-        const {x} = useMouse()
-
-        const resizing = ref(false)
-        const resizingStartPosition = ref(0)
-        const referencePanelWidth = ref(0)
-        const startResizing = () => {
-            resizingStartPosition.value = x.value;
-            referencePanelWidth.value = panelWidth.value;
-            resizing.value = true;
-
-            document.body.addEventListener("mouseup", () => {
-                resizing.value = false;
-            }, {once: true})
-        }
-
-        watchThrottled(x, () => {
-            if(resizing.value){
-                const newPanelWidth = referencePanelWidth.value + (resizingStartPosition.value - x.value);
-                panelWidth.value = Math.min(Math.max(newPanelWidth, 50), window.innerWidth * .5)
-            }
-        }, {throttle:20})
-
-        watch(localActiveTab, (value) => {
-            if(value.length){
-                x.value = 0;
-            }
-        })
-
-        return {startResizing, resizing}
-    }
+    watch(maxSidebarWidth, (value) => {
+        sidebarWidth.value = Math.min(Math.max(sidebarWidth.value, minSidebarWidth), value)
+    })
 
     function setActiveTab(tab: string) {
         if (activeTab.value === tab) {
-            store.commit("misc/setContextInfoBarOpenTab", "")
+            miscStore.contextInfoBarOpenTab = "";
         } else {
-            store.commit("misc/setContextInfoBarOpenTab", tab)
+            miscStore.contextInfoBarOpenTab = tab;
         }
     }
 
@@ -171,34 +170,65 @@
 
     const onSwitchTheme = () => {
         themeIsDark.value = !themeIsDark.value;
-        Utils.switchTheme(store, themeIsDark.value ? "dark" : "light");
+        const theme = themeIsDark.value ? "dark" : "light";
+        Utils.switchTheme(miscStore, theme);
     }
 </script>
 
-<style lang="scss" scoped>
+<style scoped lang="scss">
     @use 'element-plus/theme-chalk/src/mixins/mixins' as *;
 
-    .barResizer {
-        height: 100vh;
-        width: 5px;
+    .contextInfoSplitter {
         position: absolute;
         top: 0;
-        left: 0;
-        z-index: 1040;
-        background-color: var(--ks-button-background-primary);
-        opacity: 0;
-        transition: opacity .1s;
-        border: none;
-        cursor: col-resize;
+        right: 0;
+        bottom: 0;
+        height: 100%;
+        flex-shrink: 0;
 
-        &:hover {
-            opacity: 1;
+        :deep(.el-splitter-panel) {
+            min-width: 0;
         }
+
+        :deep(.contextInfoSpacerPanel) {
+            overflow: hidden;
+            pointer-events: none;
+        }
+
+        :deep(.el-splitter-bar) {
+            background-color: transparent;
+        }
+
+        :deep(.el-splitter__splitter) {
+            width: 5px;
+            background-color: transparent;
+            transition: background-color .1s;
+
+            &:hover,
+            &.is-dragging {
+                background-color: var(--ks-button-background-primary);
+            }
+        }
+    }
+
+    .contextInfoContent {
+        display: flex;
+        height: 100%;
+        width: 100%;
+    }
+
+    .contextInfoSidebar {
+        position: relative;
+        height: 100%;
+        flex-shrink: 0;
+        overflow: hidden;
     }
 
     .barWrapper {
         position: relative;
         width: 4rem;
+        min-width: 4rem;
+        flex-shrink: 0;
         padding: 0.75rem;
         writing-mode: vertical-rl;
         text-orientation: mixed;
@@ -207,6 +237,11 @@
         align-items: center;
         gap: 0.5rem;
         font-size: var(--font-size-sm);
+        overflow-y: auto;
+        &::-webkit-scrollbar {
+            width: 0;
+        }
+        scrollbar-width: none;
 
         &.opened {
             border-right: 1px solid var(--ks-border-primary);
@@ -228,6 +263,7 @@
             color: var(--ks-content-tertiary);
             opacity: .4;
             margin-top: 1rem;
+            white-space: nowrap;
         }
 
         .theme-switcher {
@@ -265,10 +301,15 @@
     }
 
     .panelWrapper {
-        transition: width .1s;
-        width: 0;
+        flex: 1;
+        height: 100%;
+        min-width: 0;
         position: relative;
         overflow-y: auto;
+        &::-webkit-scrollbar {
+            width: 0px;
+        }
+        scrollbar-width: none;
 
         .closeButton {
             position: fixed;
@@ -277,10 +318,8 @@
             color: var(--ks-content-tertiary);
             background: none;
             border: none;
+            z-index: 5;
         }
 
-        &.panelTabResizing {
-            transition: none;
-        }
     }
 </style>

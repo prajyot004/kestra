@@ -7,7 +7,7 @@
     >
         <span v-if="component !== 'el-button'">{{ $t('change state') }}</span>
 
-        <el-dialog v-if="enabled && visible" v-model="visible" :id="uuid" destroy-on-close :append-to-body="true">
+        <el-dialog v-if="enabled && visible" v-model="visible" :id="uuid" destroyOnClose :appendToBody="true">
             <template #header>
                 <h5>{{ $t("confirmation") }}</h5>
             </template>
@@ -16,7 +16,7 @@
                 <p v-html="$t('change state confirm', {id: execution.id, task: taskRun.taskId})" />
 
                 <p>
-                    {{ $t('change state current state') }} <status size="small" class="me-1" :status="taskRun.state.current" />
+                    {{ $t('change state current state') }} <Status size="small" class="me-1" :status="taskRun.state.current" />
                 </p>
 
                 <el-select
@@ -31,7 +31,7 @@
                         :disabled="item.disabled"
                     >
                         <template #default>
-                            <status size="small" :label="true" class="me-1" :status="item.code" />
+                            <Status size="small" :label="true" class="me-1" :status="item.code" />
                             <span v-html="item.label" />
                         </template>
                     </el-option>
@@ -64,13 +64,15 @@
 
 <script>
     import StateMachine from "vue-material-design-icons/StateMachine.vue";
-    import {mapState} from "vuex";
+    import {mapStores} from "pinia";
+    import {useExecutionsStore} from "../../stores/executions";
     import permission from "../../models/permission";
     import action from "../../models/action";
-    import {State} from "@kestra-io/ui-libs"
-    import Status from "../../components/Status.vue";
-    import ExecutionUtils from "../../utils/executionUtils";
-    import {shallowRef} from "vue";
+    import {State, Status} from "@kestra-io/ui-libs"
+    import {shallowRef, ref} from "vue";
+    import {useAuthStore} from "override/stores/auth"
+    import {useToast} from "../../utils/toast";
+    import {useI18n} from "vue-i18n";
 
     export default {
         components: {StateMachine, Status},
@@ -95,46 +97,41 @@
             }
         },
         emits: ["follow"],
-        methods: {
-            changeStatus() {
-                this.visible = false;
+        setup(props, {emit}) {
+            const visible = ref(false);
+            const selectedStatus = ref(undefined);
 
-                this.$store
-                    .dispatch("execution/changeStatus", {
-                        executionId: this.execution.id,
-                        taskRunId: this.taskRun.id,
-                        state: this.selectedStatus
+            const {t} = useI18n();
+
+            const executionsStore = useExecutionsStore();
+            const toast = useToast();
+
+            function changeStatus() {
+                visible.value = false;
+
+                executionsStore
+                    .changeStatus({
+                        executionId: props.execution.id,
+                        taskRunId: props.taskRun.id,
+                        state: selectedStatus.value
                     })
-                    .then(response => {
-                        if (response.data.id === this.execution.id) {
-                            return ExecutionUtils.waitForState(this.$http, this.$store, response.data);
-                        } else {
-                            return response.data;
-                        }
-                    })
+                    .then(() => executionsStore.waitForStateChange(props.execution))
                     .then((execution) => {
-                        this.$store.commit("execution/setExecution", execution)
-                        if (execution.id === this.execution.id) {
-                            this.$emit("follow")
-                        } else {
-                            this.$router.push({
-                                name: "executions/update",
-                                params: {
-                                    namespace: execution.namespace,
-                                    flowId: execution.flowId,
-                                    id: execution.id,
-                                    tab: "gantt",
-                                    tenant: this.$route.params.tenant
-                                }
-                            });
-                        }
+                        executionsStore.execution = execution;
+                        emit("follow")
 
-                        this.$toast().success(this.$t("change state done"));
+                        toast.success(t("change state done"));
                     })
-            },
+            }
+
+            return {
+                visible,
+                selectedStatus,
+                changeStatus
+            }
         },
         computed: {
-            ...mapState("auth", ["user"]),
+            ...mapStores(useAuthStore),
             uuid() {
                 return "changestatus-" + this.execution.id + (this.taskRun ? "-" + this.taskRun.id : "");
             },
@@ -160,7 +157,7 @@
                     })
             },
             enabled() {
-                if (!(this.user && this.user.isAllowed(permission.EXECUTION, action.UPDATE, this.execution.namespace))) {
+                if (!(this.authStore.user?.isAllowed(permission.EXECUTION, action.UPDATE, this.execution.namespace))) {
                     return false;
                 }
 
@@ -181,8 +178,6 @@
         },
         data() {
             return {
-                selectedStatus: undefined,
-                visible: false,
                 icon: {StateMachine: shallowRef(StateMachine)}
             };
         },

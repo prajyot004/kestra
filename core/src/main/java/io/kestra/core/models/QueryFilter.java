@@ -1,89 +1,182 @@
 package io.kestra.core.models;
 
-import io.kestra.core.utils.Enums;
-import lombok.Builder;
-
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonValue;
+
+import io.kestra.core.exceptions.InvalidQueryFiltersException;
+import io.kestra.core.models.dashboards.filters.*;
+import io.kestra.core.utils.Enums;
+
+import lombok.Builder;
 
 @Builder
 public record QueryFilter(
     Field field,
     Op operation,
-    Object value
-) {
+    Object value) {
+
+    @JsonCreator
+    public QueryFilter(
+        @JsonProperty("field") Field field,
+        @JsonProperty("operation") Op operation,
+        @JsonProperty("value") Object value) {
+        this.field = field;
+        this.operation = operation;
+        this.value = value;
+    }
+
     public enum Op {
-        EQUALS("$eq"),
-        NOT_EQUALS("$ne"),
-        GREATER_THAN("$gte"),
-        LESS_THAN("$lte"),
-        IN("$in"),
-        NOT_IN("$notIn"),
-        STARTS_WITH("$startsWith"),
-        ENDS_WITH("$endsWith"),
-        CONTAINS("$contains"),
-        REGEX("$regex");
+        EQUALS,
+        NOT_EQUALS,
+        GREATER_THAN,
+        LESS_THAN,
+        GREATER_THAN_OR_EQUAL_TO,
+        LESS_THAN_OR_EQUAL_TO,
+        IN,
+        NOT_IN,
+        STARTS_WITH,
+        ENDS_WITH,
+        CONTAINS,
+        REGEX,
+        PREFIX
+    }
 
-        private static final Map<String, Op> BY_VALUE = Arrays.stream(values())
-            .collect(Collectors.toMap(Op::value, Function.identity()));
-
-        private final String value;
-
-        Op(String value) {
-            this.value = value;
+    @SuppressWarnings("unchecked")
+    private List<Object> asValues(Object value) {
+        if (value instanceof String valueStr) {
+            Object[] parts = valueStr.split(",");
+            return Arrays.asList(parts);
         }
+        return (List<Object>) value;
+    }
 
-        public static Op fromString(String value) {
-            return Enums.fromString(value, BY_VALUE, "operation");
-        }
-
-        public String value() {
-            return value;
-        }
+    public <T extends Enum<T>> AbstractFilter<T> toDashboardFilterBuilder(T field, Object value) {
+        return switch (this.operation) {
+            case EQUALS -> EqualTo.<T> builder().field(field).value(value).build();
+            case NOT_EQUALS -> NotEqualTo.<T> builder().field(field).value(value).build();
+            case GREATER_THAN -> GreaterThan.<T> builder().field(field).value(value).build();
+            case LESS_THAN -> LessThan.<T> builder().field(field).value(value).build();
+            case GREATER_THAN_OR_EQUAL_TO -> GreaterThanOrEqualTo.<T> builder().field(field).value(value).build();
+            case LESS_THAN_OR_EQUAL_TO -> LessThanOrEqualTo.<T> builder().field(field).value(value).build();
+            case IN -> In.<T> builder().field(field).values(asValues(value)).build();
+            case NOT_IN -> NotIn.<T> builder().field(field).values(asValues(value)).build();
+            case STARTS_WITH -> StartsWith.<T> builder().field(field).value(value.toString()).build();
+            case ENDS_WITH -> EndsWith.<T> builder().field(field).value(value.toString()).build();
+            case CONTAINS -> Contains.<T> builder().field(field).value(value.toString()).build();
+            case REGEX -> Regex.<T> builder().field(field).value(value.toString()).build();
+            case PREFIX -> Prefix.<T> builder().field(field).value(value.toString()).build();
+        };
     }
 
     public enum Field {
         QUERY("q") {
             @Override
             public List<Op> supportedOp() {
-                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.REGEX);
+                return List.of(Op.EQUALS, Op.NOT_EQUALS);
             }
         },
         SCOPE("scope") {
             @Override
             public List<Op> supportedOp() {
-                return List.of(Op.EQUALS, Op.NOT_EQUALS);
+                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.IN, Op.NOT_IN);
             }
         },
         NAMESPACE("namespace") {
             @Override
             public List<Op> supportedOp() {
-                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.CONTAINS, Op.STARTS_WITH, Op.ENDS_WITH, Op.REGEX);
+                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.CONTAINS, Op.STARTS_WITH, Op.ENDS_WITH, Op.REGEX, Op.IN, Op.NOT_IN, Op.PREFIX);
+            }
+        },
+        KIND("kind") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.IN, Op.NOT_IN);
             }
         },
         LABELS("labels") {
             @Override
             public List<Op> supportedOp() {
-                return List.of(Op.EQUALS, Op.NOT_EQUALS);
+                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.IN, Op.NOT_IN, Op.CONTAINS);
+            }
+        },
+        TAGS("tags") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.CONTAINS, Op.IN);
+            }
+        },
+        METADATA("metadata") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.IN, Op.NOT_IN, Op.CONTAINS);
             }
         },
         FLOW_ID("flowId") {
             @Override
             public List<Op> supportedOp() {
-                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.CONTAINS, Op.IN, Op.NOT_IN);
+                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.CONTAINS, Op.STARTS_WITH, Op.ENDS_WITH, Op.REGEX, Op.IN, Op.NOT_IN, Op.PREFIX);
+            }
+        },
+        FLOW_REVISION("flowRevision") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.IN, Op.NOT_IN);
+            }
+        },
+        ID("id") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.CONTAINS, Op.STARTS_WITH, Op.ENDS_WITH, Op.REGEX, Op.IN, Op.NOT_IN);
+            }
+        },
+        ASSET_ID("assetId") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.CONTAINS, Op.STARTS_WITH, Op.ENDS_WITH, Op.REGEX, Op.IN, Op.NOT_IN);
+            }
+        },
+        TYPE("type") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.CONTAINS, Op.STARTS_WITH, Op.ENDS_WITH, Op.REGEX, Op.IN, Op.NOT_IN);
+            }
+        },
+        CREATED("created") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.GREATER_THAN_OR_EQUAL_TO, Op.GREATER_THAN, Op.LESS_THAN_OR_EQUAL_TO, Op.LESS_THAN, Op.EQUALS, Op.NOT_EQUALS);
+            }
+        },
+        UPDATED("updated") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.GREATER_THAN_OR_EQUAL_TO, Op.GREATER_THAN, Op.LESS_THAN_OR_EQUAL_TO, Op.LESS_THAN, Op.EQUALS, Op.NOT_EQUALS);
             }
         },
         START_DATE("startDate") {
             @Override
             public List<Op> supportedOp() {
-                return List.of(Op.GREATER_THAN, Op.LESS_THAN, Op.EQUALS, Op.NOT_EQUALS);
+                return List.of(Op.GREATER_THAN_OR_EQUAL_TO, Op.GREATER_THAN, Op.LESS_THAN_OR_EQUAL_TO, Op.LESS_THAN, Op.EQUALS, Op.NOT_EQUALS);
             }
         },
         END_DATE("endDate") {
             @Override
             public List<Op> supportedOp() {
-                return List.of(Op.GREATER_THAN, Op.LESS_THAN, Op.EQUALS, Op.NOT_EQUALS);
+                return List.of(Op.GREATER_THAN_OR_EQUAL_TO, Op.GREATER_THAN, Op.LESS_THAN_OR_EQUAL_TO, Op.LESS_THAN, Op.EQUALS, Op.NOT_EQUALS);
+            }
+        },
+        EXPIRATION_DATE("expirationDate") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.GREATER_THAN_OR_EQUAL_TO, Op.GREATER_THAN, Op.LESS_THAN_OR_EQUAL_TO, Op.LESS_THAN, Op.EQUALS, Op.NOT_EQUALS);
             }
         },
         STATE("state") {
@@ -92,11 +185,28 @@ public record QueryFilter(
                 return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.IN, Op.NOT_IN);
             }
         },
+        STATUS("status") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS, Op.NOT_EQUALS);
+            }
+        },
+        EMAIL("email") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS);
+            }
+        },
         TIME_RANGE("timeRange") {
             @Override
             public List<Op> supportedOp() {
-                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.CONTAINS, Op.STARTS_WITH,
-                    Op.ENDS_WITH, Op.IN, Op.NOT_IN, Op.REGEX);
+                return List.of(Op.EQUALS);
+            }
+        },
+        PARENT_ID("parentId") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.IN, Op.NOT_IN);
             }
         },
         TRIGGER_EXECUTION_ID("triggerExecutionId") {
@@ -106,6 +216,30 @@ public record QueryFilter(
             }
         },
         TRIGGER_ID("triggerId") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.CONTAINS, Op.STARTS_WITH, Op.ENDS_WITH, Op.IN, Op.NOT_IN);
+            }
+        },
+        TRIGGER_STATE("triggerState") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS, Op.NOT_EQUALS);
+            }
+        },
+        EXECUTION_ID("executionId") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.CONTAINS, Op.STARTS_WITH, Op.ENDS_WITH, Op.IN, Op.NOT_IN);
+            }
+        },
+        TASK_ID("taskId") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.CONTAINS, Op.STARTS_WITH, Op.ENDS_WITH, Op.IN, Op.NOT_IN);
+            }
+        },
+        TASK_RUN_ID("taskRunId") {
             @Override
             public List<Op> supportedOp() {
                 return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.CONTAINS, Op.STARTS_WITH, Op.ENDS_WITH, Op.IN, Op.NOT_IN);
@@ -129,10 +263,82 @@ public record QueryFilter(
                 return List.of(Op.EQUALS, Op.NOT_EQUALS);
             }
         },
+        USER_ID("userId") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS);
+            }
+        },
+        ACTION("action") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS, Op.IN);
+            }
+        },
+        RESOURCES("resources") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.IN);
+            }
+        },
+        DETAILS("details") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS);
+            }
+        },
         MIN_LEVEL("level") {
             @Override
             public List<Op> supportedOp() {
                 return List.of(Op.EQUALS, Op.NOT_EQUALS);
+            }
+        },
+        PATH("path") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.IN);
+            }
+        },
+        PARENT_PATH("parentPath") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS, Op.NOT_EQUALS, Op.STARTS_WITH);
+            }
+        },
+        VERSION("version") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS, Op.NOT_EQUALS);
+            }
+        },
+        ENABLED("enabled") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS);
+            }
+        },
+        USERNAME("username") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS);
+            }
+        },
+        NAME("name") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.EQUALS);
+            }
+        },
+        GROUP("groupList") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of(Op.IN, Op.EQUALS);
+            }
+        },
+        EXPIRED_AT("expired_at") {
+            @Override
+            public List<Op> supportedOp() {
+                return List.of();
             }
         };
 
@@ -147,21 +353,22 @@ public record QueryFilter(
             this.value = value;
         }
 
+        @JsonCreator
         public static Field fromString(String value) {
             return Enums.fromString(value, BY_VALUE, "field");
         }
 
+        @JsonValue
         public String value() {
             return value;
         }
     }
 
-
     public enum Resource {
         FLOW {
             @Override
             public List<Field> supportedField() {
-                return List.of(Field.LABELS, Field.NAMESPACE, Field.QUERY, Field.SCOPE);
+                return List.of(Field.LABELS, Field.NAMESPACE, Field.QUERY, Field.SCOPE, Field.FLOW_ID);
             }
         },
         NAMESPACE {
@@ -174,24 +381,26 @@ public record QueryFilter(
             @Override
             public List<Field> supportedField() {
                 return List.of(
-                    Field.QUERY, Field.SCOPE, Field.FLOW_ID, Field.START_DATE, Field.END_DATE, Field.TIME_RANGE,
+                    Field.QUERY, Field.SCOPE, Field.FLOW_ID, Field.START_DATE, Field.END_DATE,
                     Field.STATE, Field.LABELS, Field.TRIGGER_EXECUTION_ID, Field.CHILD_FILTER,
-                    Field.NAMESPACE
+                    Field.NAMESPACE, Field.KIND, Field.PARENT_ID
                 );
             }
         },
         LOG {
             @Override
             public List<Field> supportedField() {
-                return List.of(Field.NAMESPACE, Field.START_DATE, Field.END_DATE,
-                    Field.FLOW_ID, Field.TRIGGER_ID, Field.MIN_LEVEL
+                return List.of(
+                    Field.QUERY, Field.SCOPE, Field.NAMESPACE, Field.START_DATE,
+                    Field.END_DATE, Field.FLOW_ID, Field.TRIGGER_ID, Field.MIN_LEVEL, Field.EXECUTION_ID
                 );
             }
         },
         TASK {
             @Override
             public List<Field> supportedField() {
-                return List.of(Field.NAMESPACE, Field.QUERY, Field.END_DATE, Field.FLOW_ID, Field.START_DATE,
+                return List.of(
+                    Field.NAMESPACE, Field.QUERY, Field.END_DATE, Field.FLOW_ID, Field.START_DATE,
                     Field.STATE, Field.LABELS, Field.TRIGGER_EXECUTION_ID, Field.CHILD_FILTER
                 );
             }
@@ -205,8 +414,179 @@ public record QueryFilter(
         TRIGGER {
             @Override
             public List<Field> supportedField() {
-                return List.of(Field.QUERY, Field.NAMESPACE, Field.WORKER_ID, Field.FLOW_ID
+                return List.of(
+                    Field.QUERY, Field.SCOPE, Field.NAMESPACE, Field.WORKER_ID, Field.FLOW_ID,
+                    Field.START_DATE, Field.END_DATE, Field.TRIGGER_ID, Field.TRIGGER_STATE
                 );
+            }
+        },
+        USER {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(Field.QUERY, Field.USERNAME, Field.GROUP, Field.NAME);
+            }
+        },
+        ROLE {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(Field.QUERY, Field.NAME);
+            }
+        },
+        INVITATION {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(Field.QUERY, Field.EMAIL, Field.STATUS, Field.EXPIRED_AT);
+            }
+        },
+        GROUP {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(Field.QUERY, Field.NAME);
+            }
+        },
+        BINDING {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(Field.QUERY, Field.NAMESPACE, Field.TYPE);
+            }
+        },
+        SECURITY_INTEGRATION {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(Field.QUERY, Field.ENABLED);
+            }
+        },
+        SECRET_METADATA {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(
+                    Field.QUERY,
+                    Field.NAMESPACE
+                );
+            }
+        },
+        KV_METADATA {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(
+                    Field.QUERY,
+                    Field.NAMESPACE,
+                    Field.UPDATED,
+                    Field.EXPIRATION_DATE
+                );
+            }
+        },
+        NAMESPACE_FILE_METADATA {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(
+                    Field.QUERY,
+                    Field.NAMESPACE,
+                    Field.PATH,
+                    Field.PARENT_PATH,
+                    Field.VERSION,
+                    Field.UPDATED
+                );
+            }
+        },
+        PLUGIN {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(
+                    Field.QUERY
+                );
+            }
+        },
+        ASSET {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(
+                    Field.QUERY,
+                    Field.ID,
+                    Field.TYPE,
+                    Field.NAMESPACE,
+                    Field.METADATA,
+                    Field.UPDATED
+                );
+            }
+        },
+        ASSET_USAGE {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(
+                    Field.QUERY,
+                    Field.ASSET_ID,
+                    Field.NAMESPACE,
+                    Field.FLOW_ID,
+                    Field.FLOW_REVISION,
+                    Field.EXECUTION_ID,
+                    Field.TASK_ID,
+                    Field.TASK_RUN_ID,
+                    Field.CREATED
+                );
+            }
+        },
+        ASSET_LINEAGE_EVENT {
+            @Override
+            public List<Field> supportedField() {
+                // ASSET_ID is not supported for now as it needs complex json parsing
+                return List.of(
+                    Field.NAMESPACE,
+                    Field.FLOW_ID,
+                    Field.FLOW_REVISION,
+                    Field.EXECUTION_ID,
+                    Field.TASK_ID,
+                    Field.TASK_RUN_ID,
+                    Field.CREATED
+                );
+            }
+        },
+        CREDENTIALS {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(
+                    Field.QUERY,
+                    Field.ID,
+                    Field.NAMESPACE,
+                    Field.TYPE
+                );
+            }
+        },
+        AUDIT_LOG {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(
+                    Field.QUERY,
+                    Field.NAMESPACE,
+                    Field.FLOW_ID,
+                    Field.EXECUTION_ID,
+                    Field.ID,
+                    Field.USER_ID,
+                    Field.TYPE,
+                    Field.RESOURCES,
+                    Field.ACTION,
+                    Field.DETAILS,
+                    Field.START_DATE,
+                    Field.END_DATE
+                );
+            }
+        },
+        SERVICE_INSTANCE {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(Field.STATE, Field.TYPE, Field.CREATED);
+            }
+        },
+        TENANT {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(Field.QUERY);
+            }
+        },
+        APP {
+            @Override
+            public List<Field> supportedField() {
+                return List.of(Field.QUERY, Field.TAGS, Field.NAMESPACE, Field.FLOW_ID);
             }
         };
 
@@ -218,18 +598,6 @@ public record QueryFilter(
          *
          * @return List of {@code ResourceField} with resource names, fields, and operations.
          */
-        public static List<ResourceField> asResourceList() {
-            return Arrays.stream(values())
-                .map(Resource::toResourceField)
-                .toList();
-        }
-
-        private static ResourceField toResourceField(Resource resource) {
-            List<FieldOp> fieldOps = resource.supportedField().stream()
-                .map(Resource::toFieldInfo)
-                .toList();
-            return new ResourceField(resource.name().toLowerCase(), fieldOps);
-        }
 
         private static FieldOp toFieldInfo(Field field) {
             List<Operation> operations = field.supportedOp().stream()
@@ -239,12 +607,43 @@ public record QueryFilter(
         }
 
         private static Operation toOperation(Op op) {
-            return new Operation(op.name(), op.value());
+            return new Operation(op.name(), op.name());
         }
     }
 
-    public record ResourceField(String name, List<FieldOp> fields) {}
-    public record FieldOp(String name, String value, List<Operation> operations) {}
-    public record Operation(String name, String value) {}
+    public record FieldOp(String name, String value, List<Operation> operations) {
+    }
+
+    public record Operation(String name, String value) {
+    }
+
+    public static void validateQueryFilters(List<QueryFilter> filters, Resource resource) {
+        if (filters == null) {
+            return;
+        }
+        List<String> errors = new ArrayList<>();
+        filters.forEach(filter ->
+        {
+            if (!filter.field().supportedOp().contains(filter.operation())) {
+                errors.add(
+                    "Operation %s is not supported for field %s. Supported operations are %s".formatted(
+                        filter.operation(), filter.field().name(),
+                        filter.field().supportedOp().stream().map(Op::name).collect(Collectors.joining(", "))
+                    )
+                );
+            }
+            if (!resource.supportedField().contains(filter.field())) {
+                errors.add(
+                    "Field %s is not supported for resource %s. Supported fields are %s".formatted(
+                        filter.field().name(), resource.name(),
+                        resource.supportedField().stream().map(Field::name).collect(Collectors.joining(", "))
+                    )
+                );
+            }
+        });
+        if (!errors.isEmpty()) {
+            throw new InvalidQueryFiltersException(errors);
+        }
+    }
 
 }

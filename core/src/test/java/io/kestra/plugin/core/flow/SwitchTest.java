@@ -1,103 +1,121 @@
 package io.kestra.plugin.core.flow;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import java.util.concurrent.TimeoutException;
+
+import org.junit.jupiter.api.Test;
 
 import com.google.common.collect.ImmutableMap;
+
+import io.kestra.core.junit.annotations.ExecuteFlow;
 import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.junit.annotations.LoadFlows;
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.flows.State;
 import io.kestra.core.queues.QueueException;
-import io.kestra.core.runners.RunnerUtils;
+import io.kestra.core.runners.TestRunnerUtils;
+import io.kestra.core.services.TaskOutputService;
+
 import jakarta.inject.Inject;
-import java.util.concurrent.TimeoutException;
-import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 @KestraTest(startRunner = true)
 class SwitchTest {
 
     @Inject
-    private RunnerUtils runnerUtils;
+    private TestRunnerUtils runnerUtils;
+
+    @Inject
+    private TaskOutputService taskOutputService;
 
     @Test
-    @LoadFlows({"flows/valids/switch.yaml"})
-    void switchFirst() throws TimeoutException, QueueException {
+    @LoadFlows(value = { "flows/valids/switch.yaml" }, tenantId = "switch")
+    void switchFirst() throws TimeoutException, QueueException, io.kestra.core.exceptions.InternalException {
         Execution execution = runnerUtils.runOne(
-            null,
+            "switch",
             "io.kestra.tests",
             "switch",
             null,
             (f, e) -> ImmutableMap.of("string", "FIRST")
         );
 
-        assertThat(execution.getTaskRunList().get(1).getTaskId(), is("t1"));
-        assertThat(execution.findTaskRunsByTaskId("parent-seq").getFirst().getOutputs().get("value"), is("FIRST"));
-        assertThat(execution.findTaskRunsByTaskId("parent-seq").getFirst().getOutputs().get("defaults"), is(false));
+        assertThat(execution.getTaskRunList().get(1).getTaskId()).isEqualTo("t1");
+        assertThat(taskOutputService.getOutputs(execution.findTaskRunsByTaskId("parent-seq").getFirst()).get("value")).isEqualTo("FIRST");
+        assertThat((Boolean) taskOutputService.getOutputs(execution.findTaskRunsByTaskId("parent-seq").getFirst()).get("defaults")).isEqualTo(false);
     }
 
     @Test
-    @LoadFlows({"flows/valids/switch.yaml"})
-    void switchSecond() throws TimeoutException, QueueException {
+    @LoadFlows(value = { "flows/valids/switch.yaml" }, tenantId = "second")
+    void switchSecond() throws TimeoutException, QueueException, io.kestra.core.exceptions.InternalException {
         Execution execution = runnerUtils.runOne(
-            null,
+            "second",
             "io.kestra.tests",
             "switch",
             null,
             (f, e) -> ImmutableMap.of("string", "SECOND")
         );
 
-        assertThat(execution.getTaskRunList().get(1).getTaskId(), is("t2"));
-        assertThat(execution.findTaskRunsByTaskId("parent-seq").getFirst().getOutputs().get("value"), is("SECOND"));
-        assertThat(execution.findTaskRunsByTaskId("parent-seq").getFirst().getOutputs().get("defaults"), is(false));
-        assertThat(execution.getTaskRunList().get(2).getTaskId(), is("t2_sub"));
+        assertThat(execution.getTaskRunList().get(1).getTaskId()).isEqualTo("t2");
+        assertThat(taskOutputService.getOutputs(execution.findTaskRunsByTaskId("parent-seq").getFirst()).get("value")).isEqualTo("SECOND");
+        assertThat((Boolean) taskOutputService.getOutputs(execution.findTaskRunsByTaskId("parent-seq").getFirst()).get("defaults")).isFalse();
+        assertThat(execution.getTaskRunList().get(2).getTaskId()).isEqualTo("t2_sub");
     }
 
     @Test
-    @LoadFlows({"flows/valids/switch.yaml"})
-    void switchThird() throws TimeoutException, QueueException {
+    @LoadFlows(value = { "flows/valids/switch.yaml" }, tenantId = "switchthird")
+    void switchThird() throws TimeoutException, QueueException, io.kestra.core.exceptions.InternalException {
         Execution execution = runnerUtils.runOne(
-            null,
+            "switchthird",
             "io.kestra.tests",
             "switch",
             null,
             (f, e) -> ImmutableMap.of("string", "THIRD")
         );
 
-        assertThat(execution.getTaskRunList().get(1).getTaskId(), is("t3"));
-        assertThat(execution.findTaskRunsByTaskId("parent-seq").getFirst().getOutputs().get("value"), is("THIRD"));
-        assertThat(execution.findTaskRunsByTaskId("parent-seq").getFirst().getOutputs().get("defaults"), is(false));
-        assertThat(execution.getTaskRunList().get(2).getTaskId(), is("failed"));
-        assertThat(execution.getTaskRunList().get(3).getTaskId(), is("error-t1"));
+        assertThat(execution.getTaskRunList().get(1).getTaskId()).isEqualTo("t3");
+        assertThat(taskOutputService.getOutputs(execution.findTaskRunsByTaskId("parent-seq").getFirst()).get("value")).isEqualTo("THIRD");
+        assertThat((Boolean) taskOutputService.getOutputs(execution.findTaskRunsByTaskId("parent-seq").getFirst()).get("defaults")).isFalse();
+        assertThat(execution.getTaskRunList().get(2).getTaskId()).isEqualTo("failed");
+        assertThat(execution.getTaskRunList().get(3).getTaskId()).isEqualTo("error-t1");
     }
 
     @Test
-    @LoadFlows({"flows/valids/switch.yaml"})
-    void switchDefault() throws TimeoutException, QueueException {
+    @LoadFlows(value = { "flows/valids/switch.yaml" }, tenantId = "switchdefault")
+    void switchDefault() throws TimeoutException, QueueException, io.kestra.core.exceptions.InternalException {
         Execution execution = runnerUtils.runOne(
-            null,
+            "switchdefault",
             "io.kestra.tests",
             "switch",
             null,
             (f, e) -> ImmutableMap.of("string", "DEFAULT")
         );
 
-        assertThat(execution.getTaskRunList().get(1).getTaskId(), is("default"));
-        assertThat(execution.findTaskRunsByTaskId("parent-seq").getFirst().getOutputs().get("value"), is("DEFAULT"));
-        assertThat(execution.findTaskRunsByTaskId("parent-seq").getFirst().getOutputs().get("defaults"), is(true));
+        assertThat(execution.getTaskRunList().get(1).getTaskId()).isEqualTo("default");
+        assertThat(taskOutputService.getOutputs(execution.findTaskRunsByTaskId("parent-seq").getFirst()).get("value")).isEqualTo("DEFAULT");
+        assertThat((Boolean) taskOutputService.getOutputs(execution.findTaskRunsByTaskId("parent-seq").getFirst()).get("defaults")).isTrue();
     }
 
     @Test
-    @LoadFlows({"flows/valids/switch-impossible.yaml"})
+    @LoadFlows(value = { "flows/valids/switch-impossible.yaml" }, tenantId = "switchimpossible")
     void switchImpossible() throws TimeoutException, QueueException {
         Execution execution = runnerUtils.runOne(
-            null,
+            "switchimpossible",
             "io.kestra.tests",
             "switch-impossible",
             null,
             (f, e) -> ImmutableMap.of("string", "impossible")
         );
 
-        assertThat(execution.getState().getCurrent(), is(State.Type.FAILED));
+        assertThat(execution.getState().getCurrent()).isEqualTo(State.Type.FAILED);
+    }
+
+    @Test
+    @ExecuteFlow(value = "flows/valids/switch-in-concurrent-loop.yaml", tenantId = "switchinconcurrentloop")
+    void switchInConcurrentLoop(Execution execution) {
+        assertThat(execution.getState().getCurrent()).isEqualTo(State.Type.SUCCESS);
+        assertThat(execution.getTaskRunList()).hasSize(5);
+        // we check that OOMCRM_EB_DD_000 and OOMCRM_EB_DD_001 have been processed once
+        assertThat(execution.getTaskRunList().stream().filter(t -> t.getTaskId().equals("OOMCRM_EB_DD_000")).count()).isEqualTo(1);
+        assertThat(execution.getTaskRunList().stream().filter(t -> t.getTaskId().equals("OOMCRM_EB_DD_001")).count()).isEqualTo(1);
     }
 }

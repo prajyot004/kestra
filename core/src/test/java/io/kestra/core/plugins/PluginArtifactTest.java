@@ -1,14 +1,13 @@
 package io.kestra.core.plugins;
 
-import static org.junit.jupiter.api.Assertions.*;
-
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.*;
 
 class PluginArtifactTest {
 
     @Test
-    void shouldParseGivenValidFilenameWithoutClassifier(){
+    void shouldParseGivenValidFilenameWithoutClassifier() {
         String fileName = "io_kestra_plugin__plugin-serdes__0_20_0.jar";
         PluginArtifact artifact = PluginArtifact.fromFileName(fileName);
 
@@ -30,6 +29,32 @@ class PluginArtifactTest {
         assertEquals("jar", artifact.extension());
         assertEquals("custom-classifier", artifact.classifier());
         assertEquals("0.20.0", artifact.version());
+        assertNull(artifact.uri());
+    }
+
+    @Test
+    void shouldParseGivenValidFilenameWithQualifier() {
+        String fileName = "io_kestra_plugin__plugin-serdes__custom-classifier__0_20_0-SNAPSHOT.jar";
+        PluginArtifact artifact = PluginArtifact.fromFileName(fileName);
+
+        assertEquals("io.kestra.plugin", artifact.groupId());
+        assertEquals("plugin-serdes", artifact.artifactId());
+        assertEquals("jar", artifact.extension());
+        assertEquals("custom-classifier", artifact.classifier());
+        assertEquals("0.20.0-SNAPSHOT", artifact.version());
+        assertNull(artifact.uri());
+    }
+
+    @Test
+    void shouldParseGivenValidFilenameWithNonStandardQualifier() {
+        String fileName = "io_kestra_plugin__plugin-serdes__custom-classifier__0_20_0-RC1-SNAPSHOT.jar";
+        PluginArtifact artifact = PluginArtifact.fromFileName(fileName);
+
+        assertEquals("io.kestra.plugin", artifact.groupId());
+        assertEquals("plugin-serdes", artifact.artifactId());
+        assertEquals("jar", artifact.extension());
+        assertEquals("custom-classifier", artifact.classifier());
+        assertEquals("0.20.0-RC1-SNAPSHOT", artifact.version());
         assertNull(artifact.uri());
     }
 

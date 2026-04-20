@@ -1,50 +1,5 @@
 package io.kestra.core.http.client;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.google.common.net.HttpHeaders;
-import io.kestra.core.exceptions.IllegalVariableEvaluationException;
-import io.kestra.core.http.HttpRequest;
-import io.kestra.core.http.HttpResponse;
-import io.kestra.core.http.client.configurations.HttpConfiguration;
-import io.kestra.core.http.client.configurations.ProxyConfiguration;
-import io.kestra.core.junit.annotations.KestraTest;
-import io.kestra.core.models.executions.Execution;
-import io.kestra.core.models.executions.LogEntry;
-import io.kestra.core.models.flows.Flow;
-import io.kestra.core.models.property.Property;
-import io.kestra.core.queues.QueueFactoryInterface;
-import io.kestra.core.queues.QueueInterface;
-import io.kestra.core.runners.RunContext;
-import io.kestra.core.runners.RunContextFactory;
-import io.kestra.core.serializers.JacksonMapper;
-import io.kestra.core.utils.IdUtils;
-import io.kestra.core.utils.TestsUtils;
-import io.micronaut.context.ApplicationContext;
-import io.micronaut.http.HttpStatus;
-import io.micronaut.http.MediaType;
-import io.micronaut.http.annotation.*;
-import io.micronaut.http.multipart.CompletedFileUpload;
-import io.micronaut.http.server.multipart.MultipartBody;
-import io.micronaut.runtime.server.EmbeddedServer;
-import io.micronaut.scheduling.TaskExecutors;
-import io.micronaut.scheduling.annotation.ExecuteOn;
-import jakarta.annotation.Nullable;
-import jakarta.inject.Inject;
-import jakarta.inject.Named;
-import lombok.Builder;
-import lombok.Value;
-import org.apache.commons.io.IOUtils;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.MethodSource;
-import org.junitpioneer.jupiter.RetryingTest;
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-import reactor.core.publisher.Flux;
-
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
@@ -60,18 +15,68 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.*;
+import org.apache.commons.io.IOUtils;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junitpioneer.jupiter.RetryingTest;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.google.common.net.HttpHeaders;
+
+import io.kestra.core.context.TestRunContextFactory;
+import io.kestra.core.exceptions.IllegalVariableEvaluationException;
+import io.kestra.core.http.HttpRequest;
+import io.kestra.core.http.HttpResponse;
+import io.kestra.core.http.HttpSseEvent;
+import io.kestra.core.http.client.configurations.HttpConfiguration;
+import io.kestra.core.http.client.configurations.ProxyConfiguration;
+import io.kestra.core.junit.annotations.KestraTest;
+import io.kestra.core.models.executions.Execution;
+import io.kestra.core.models.executions.LogEntry;
+import io.kestra.core.models.flows.Flow;
+import io.kestra.core.models.property.Property;
+import io.kestra.core.queues.DispatchQueueInterface;
+import io.kestra.core.runners.RunContext;
+import io.kestra.core.serializers.JacksonMapper;
+import io.kestra.core.utils.IdUtils;
+import io.kestra.core.utils.TestsUtils;
+
+import io.micronaut.context.ApplicationContext;
+import io.micronaut.http.HttpStatus;
+import io.micronaut.http.MediaType;
+import io.micronaut.http.annotation.*;
+import io.micronaut.http.multipart.CompletedFileUpload;
+import io.micronaut.http.server.multipart.MultipartBody;
+import io.micronaut.runtime.server.EmbeddedServer;
+import io.micronaut.scheduling.TaskExecutors;
+import io.micronaut.scheduling.annotation.ExecuteOn;
+import jakarta.annotation.Nullable;
+import jakarta.inject.Inject;
+import lombok.Builder;
+import reactor.core.publisher.Flux;
+
+import static org.apache.commons.lang3.ArrayUtils.toPrimitive;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @KestraTest
 @Testcontainers
+@org.junit.jupiter.api.parallel.Execution(ExecutionMode.SAME_THREAD)
 class HttpClientTest {
     @Inject
     private ApplicationContext applicationContext;
 
     @Inject
-    private RunContextFactory runContextFactory;
+    private TestRunContextFactory runContextFactory;
 
     private URI embeddedServerUri;
 
@@ -82,8 +87,7 @@ class HttpClientTest {
         .withEnv(Map.of("AUTH_USER", "pr0xy", "AUTH_PASSWORD", "p4ss"));
 
     @Inject
-    @Named(QueueFactoryInterface.WORKERTASKLOG_NAMED)
-    QueueInterface<LogEntry> workerTaskLogQueue;
+    DispatchQueueInterface<LogEntry> workerTaskLogQueue;
 
     @BeforeEach
     void setUp() {
@@ -114,7 +118,7 @@ class HttpClientTest {
         Execution execution = TestsUtils.mockExecution(flow, Map.of());
 
         List<LogEntry> logs = new CopyOnWriteArrayList<>();
-        TestsUtils.receive(workerTaskLogQueue, either -> logs.add(either.getLeft()));
+        workerTaskLogQueue.addListener(logs::add);
 
         RunContext runContext = runContextFactory.of(flow, execution);
 
@@ -132,15 +136,14 @@ class HttpClientTest {
                 String.class
             );
 
-
-            assertThat(response.getStatus().getCode(), is(200));
-            assertThat(response.getBody(), is("pong"));
+            assertThat(response.getStatus().getCode()).isEqualTo(200);
+            assertThat(response.getBody()).isEqualTo("pong");
 
             List<LogEntry> logEntries = TestsUtils.awaitLogs(logs, 6);
 
-            assertThat(logEntries.stream().filter(logEntry -> logEntry.getMessage().startsWith("request")).count(), is(3L));
-            assertThat(logEntries.stream().filter(logEntry -> logEntry.getMessage().contains("X-Unit: Test")).count(), is(1L));
-            assertThat(logEntries.stream().filter(logEntry -> logEntry.getMessage().startsWith("response")).count(), is(3L));
+            assertThat(logEntries.stream().filter(logEntry -> logEntry.getMessage().startsWith("request")).count()).isEqualTo(3L);
+            assertThat(logEntries.stream().filter(logEntry -> logEntry.getMessage().contains("X-Unit: Test")).count()).isEqualTo(1L);
+            assertThat(logEntries.stream().filter(logEntry -> logEntry.getMessage().startsWith("response")).count()).isEqualTo(3L);
         }
     }
 
@@ -152,8 +155,8 @@ class HttpClientTest {
                 Byte[].class
             );
 
-            assertThat(response.getStatus().getCode(), is(200));
-            assertThat(response.getBody(), is("pong".getBytes(StandardCharsets.UTF_8)));
+            assertThat(response.getStatus().getCode()).isEqualTo(200);
+            assertThat(toPrimitive(response.getBody())).isEqualTo("pong".getBytes(StandardCharsets.UTF_8));
         }
     }
 
@@ -165,8 +168,8 @@ class HttpClientTest {
                 String.class
             );
 
-            assertThat(response.getStatus().getCode(), is(204));
-            assertThat(response.getBody(), is(nullValue()));
+            assertThat(response.getStatus().getCode()).isEqualTo(204);
+            assertThat(response.getBody()).isNull();
         }
     }
 
@@ -177,9 +180,9 @@ class HttpClientTest {
                 HttpRequest.of(URI.create(embeddedServerUri + "/http/json"))
             );
 
-            assertThat(response.getStatus().getCode(), is(200));
-            assertThat(response.getBody().get("ping"), is("pong"));
-            assertThat(response.getHeaders().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow(), is(MediaType.APPLICATION_JSON));
+            assertThat(response.getStatus().getCode()).isEqualTo(200);
+            assertThat(response.getBody().get("ping")).isEqualTo("pong");
+            assertThat(response.getHeaders().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow()).isEqualTo(MediaType.APPLICATION_JSON);
         }
     }
 
@@ -190,9 +193,9 @@ class HttpClientTest {
                 HttpRequest.of(URI.create(embeddedServerUri + "/http/json?array=true"))
             );
 
-            assertThat(response.getStatus().getCode(), is(200));
-            assertThat(response.getBody(), containsInAnyOrder(1, 2, 3));
-            assertThat(response.getHeaders().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow(), is(MediaType.APPLICATION_JSON));
+            assertThat(response.getStatus().getCode()).isEqualTo(200);
+            assertThat(response.getBody()).containsExactlyInAnyOrder(1, 2, 3);
+            assertThat(response.getHeaders().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow()).isEqualTo(MediaType.APPLICATION_JSON);
         }
     }
 
@@ -204,9 +207,9 @@ class HttpClientTest {
                 String.class
             );
 
-            assertThat(response.getStatus().getCode(), is(200));
-            assertThat(response.getBody(), is("{\"ping\":\"pong\"}"));
-            assertThat(response.getHeaders().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow(), is(MediaType.APPLICATION_JSON));
+            assertThat(response.getStatus().getCode()).isEqualTo(200);
+            assertThat(response.getBody()).isEqualTo("{\"ping\":\"pong\"}");
+            assertThat(response.getHeaders().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow()).isEqualTo(MediaType.APPLICATION_JSON);
         }
     }
 
@@ -215,15 +218,17 @@ class HttpClientTest {
     static Stream<Arguments> postJsonSource() throws JsonProcessingException {
         return Stream.of(
             Arguments.of(HttpRequest.JsonRequestBody.builder().content(Map.of("ping", UUID)).build()),
-            Arguments.of(HttpRequest.InputStreamRequestBody.builder()
-                .content(new ByteArrayInputStream(JacksonMapper.ofJson().writeValueAsBytes(Map.of("ping", UUID))))
-                .contentType(MediaType.APPLICATION_JSON)
-                .build()
+            Arguments.of(
+                HttpRequest.InputStreamRequestBody.builder()
+                    .content(new ByteArrayInputStream(JacksonMapper.ofJson().writeValueAsBytes(Map.of("ping", UUID))))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .build()
             ),
-            Arguments.of(HttpRequest.ByteArrayRequestBody.builder()
-                .content(JacksonMapper.ofJson().writeValueAsBytes(Map.of("ping", UUID)))
-                .contentType(MediaType.APPLICATION_JSON)
-                .build()
+            Arguments.of(
+                HttpRequest.ByteArrayRequestBody.builder()
+                    .content(JacksonMapper.ofJson().writeValueAsBytes(Map.of("ping", UUID)))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .build()
             )
 
         );
@@ -237,9 +242,9 @@ class HttpClientTest {
                 HttpRequest.of(URI.create(embeddedServerUri + "/http/json-post"), "POST", requestBody)
             );
 
-            assertThat(response.getStatus().getCode(), is(200));
-            assertThat(response.getBody().get("ping"), is(UUID));
-            assertThat(response.getHeaders().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow(), is(MediaType.APPLICATION_JSON));
+            assertThat(response.getStatus().getCode()).isEqualTo(200);
+            assertThat(response.getBody().get("ping")).isEqualTo(UUID);
+            assertThat(response.getHeaders().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow()).isEqualTo(MediaType.APPLICATION_JSON);
         }
     }
 
@@ -256,9 +261,33 @@ class HttpClientTest {
                 CustomObject.class
             );
 
-            assertThat(response.getStatus().getCode(), is(200));
-            assertThat(response.getBody().id, is(test.id));
-            assertThat(response.getHeaders().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow(), is(MediaType.APPLICATION_JSON));
+            assertThat(response.getStatus().getCode()).isEqualTo(200);
+            assertThat(response.getBody().id).isEqualTo(test.id);
+            assertThat(response.getHeaders().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow()).isEqualTo(MediaType.APPLICATION_JSON);
+        }
+    }
+
+    @Test
+    void postCustomObject_WithUnknownResponseField() throws IllegalVariableEvaluationException, HttpClientException, IOException {
+        CustomObject test = CustomObject.builder()
+            .id(IdUtils.create())
+            .name("test")
+            .build();
+
+        Map<String, String> withAdditionalField = JacksonMapper.ofJson().convertValue(test, new TypeReference<>() {
+        });
+
+        withAdditionalField.put("foo", "bar");
+
+        try (HttpClient client = client()) {
+            HttpResponse<CustomObject> response = client.request(
+                HttpRequest.of(URI.create(embeddedServerUri + "/http/json-post"), "POST", HttpRequest.JsonRequestBody.builder().content(withAdditionalField).build()),
+                CustomObject.class
+            );
+
+            assertThat(response.getStatus().getCode()).isEqualTo(200);
+            assertThat(response.getBody().id).isEqualTo(test.id);
+            assertThat(response.getHeaders().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow()).isEqualTo(MediaType.APPLICATION_JSON);
         }
     }
 
@@ -267,12 +296,13 @@ class HttpClientTest {
         Map<String, Object> multipart = Map.of(
             "ping", "pong",
             "int", 1,
-             "file", new File(Objects.requireNonNull(this.getClass().getClassLoader().getResource("logback.xml")).toURI()),
-            "inputStream", new ByteArrayInputStream(IOUtils.toString(
+            "file", new File(Objects.requireNonNull(this.getClass().getClassLoader().getResource("logback.xml")).toURI()),
+            "inputStream", new ByteArrayInputStream(
+                IOUtils.toString(
                     Objects.requireNonNull(this.getClass().getClassLoader().getResourceAsStream("logback.xml")),
                     StandardCharsets.UTF_8
                 )
-                .getBytes(StandardCharsets.UTF_8)
+                    .getBytes(StandardCharsets.UTF_8)
             )
         );
 
@@ -281,13 +311,13 @@ class HttpClientTest {
                 HttpRequest.of(URI.create(embeddedServerUri + "/http/multipart"), "POST", HttpRequest.MultipartRequestBody.builder().content(multipart).build())
             );
 
-            assertThat(response.getStatus().getCode(), is(200));
-            assertThat(response.getBody().get("ping"), is("pong"));
-            assertThat(response.getBody().get("int"), is("1"));
-            assertThat((String) response.getBody().get("file"), containsString("logback"));
+            assertThat(response.getStatus().getCode()).isEqualTo(200);
+            assertThat(response.getBody().get("ping")).isEqualTo("pong");
+            assertThat(response.getBody().get("int")).isEqualTo("1");
+            assertThat((String) response.getBody().get("file")).contains("logback");
             // @FIXME: Request seems to be correct, but not returned by micronaut
             // assertThat((String) response.getBody().get("inputStream"), containsString("logback"));
-            assertThat(response.getHeaders().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow(), is(MediaType.APPLICATION_JSON));
+            assertThat(response.getHeaders().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow()).isEqualTo(MediaType.APPLICATION_JSON);
         }
     }
 
@@ -296,12 +326,13 @@ class HttpClientTest {
         try (HttpClient client = client()) {
             URI uri = URI.create("http://localhost:1234");
 
-            HttpClientRequestException e = assertThrows(HttpClientRequestException.class, () -> {
+            HttpClientRequestException e = assertThrows(HttpClientRequestException.class, () ->
+            {
                 client.request(HttpRequest.of(uri));
             });
 
-            assertThat(e.getRequest().getUri(), is(uri));
-            assertThat(e.getMessage(), containsString("Connection refused"));
+            assertThat(e.getRequest().getUri()).isEqualTo(uri);
+            assertThat(e.getMessage()).contains("Connection refused");
         }
     }
 
@@ -310,7 +341,7 @@ class HttpClientTest {
         try (HttpClient client = client()) {
             HttpResponse<Map<String, String>> response = client.request(HttpRequest.of(URI.create(embeddedServerUri + "/http/error?status=305")));
 
-            assertThat(response.getStatus().getCode(), is(305));
+            assertThat(response.getStatus().getCode()).isEqualTo(305);
         }
     }
 
@@ -319,13 +350,14 @@ class HttpClientTest {
         try (HttpClient client = client()) {
             URI uri = URI.create(embeddedServerUri + "/http/error");
 
-            HttpClientResponseException e = assertThrows(HttpClientResponseException.class, () -> {
+            HttpClientResponseException e = assertThrows(HttpClientResponseException.class, () ->
+            {
                 client.request(HttpRequest.of(uri));
             });
 
-            assertThat(Objects.requireNonNull(e.getResponse()).getStatus().getCode(), is(400));
-            assertThat(e.getMessage(), containsString("Required QueryValue [status]"));
-            assertThat(new String((byte[]) e.getResponse().getBody()), containsString("Required QueryValue [status]"));
+            assertThat(Objects.requireNonNull(e.getResponse()).getStatus().getCode()).isEqualTo(400);
+            assertThat(e.getMessage()).contains("Required QueryValue [status]");
+            assertThat(new String((byte[]) e.getResponse().getBody())).contains("Required QueryValue [status]");
         }
     }
 
@@ -334,20 +366,33 @@ class HttpClientTest {
         try (HttpClient client = client()) {
             URI uri = URI.create(embeddedServerUri + "/http/error?status=404");
 
-            HttpClientResponseException e = assertThrows(HttpClientResponseException.class, () -> {
+            HttpClientResponseException e = assertThrows(HttpClientResponseException.class, () ->
+            {
                 client.request(HttpRequest.of(uri));
             });
 
-            assertThat(Objects.requireNonNull(e.getResponse()).getStatus().getCode(), is(404));
+            assertThat(Objects.requireNonNull(e.getResponse()).getStatus().getCode()).isEqualTo(404);
         }
     }
 
     @Test
     void noError404() throws IOException, IllegalVariableEvaluationException, HttpClientException {
-        try (HttpClient client = client(b -> b.configuration(HttpConfiguration.builder().allowFailed(Property.of(true)).build()))) {
+        try (HttpClient client = client(b -> b.configuration(HttpConfiguration.builder().allowFailed(Property.ofValue(true)).build()))) {
             HttpResponse<Map<String, String>> response = client.request(HttpRequest.of(URI.create(embeddedServerUri + "/http/error?status=404")));
 
-            assertThat(response.getStatus().getCode(), is(404));
+            assertThat(response.getStatus().getCode()).isEqualTo(404);
+        }
+    }
+
+    @Test
+    void noErrorPost404() throws IOException, IllegalVariableEvaluationException, HttpClientException {
+        try (HttpClient client = client(b -> b.configuration(HttpConfiguration.builder().allowFailed(Property.ofValue(true)).build()))) {
+            URI uri = URI.create(embeddedServerUri + "/http/post-error");
+
+            HttpResponse<Map<String, String>> response = client
+                .request(HttpRequest.builder().uri(uri).method("POST").body(HttpRequest.StringRequestBody.builder().content("OK").build()).build());
+
+            assertThat(response.getStatus().getCode()).isEqualTo(404);
         }
     }
 
@@ -355,37 +400,130 @@ class HttpClientTest {
     void specialContentType() throws IllegalVariableEvaluationException, HttpClientException, IOException {
         try (HttpClient client = client()) {
             HttpResponse<String> response = client.request(
-                HttpRequest.of(URI.create(embeddedServerUri + "/http/content-type"), Map.of(
-                    "Content-Type", List.of("application/vnd.campaignsexport.v1+json")
-                )),
+                HttpRequest.of(
+                    URI.create(embeddedServerUri + "/http/content-type"), Map.of(
+                        "Content-Type", List.of("application/vnd.campaignsexport.v1+json")
+                    )
+                ),
                 String.class
             );
 
-            assertThat(response.getStatus().getCode(), is(200));
-            assertThat(response.getBody(), is("application/vnd.campaignsexport.v1+json"));
+            assertThat(response.getStatus().getCode()).isEqualTo(200);
+            assertThat(response.getBody()).isEqualTo("application/vnd.campaignsexport.v1+json");
         }
     }
 
     @Test
     void getProxy() throws IllegalVariableEvaluationException, HttpClientException, IOException {
-        try (HttpClient client = client(b -> b
-            .configuration(HttpConfiguration.builder()
-                .proxy(ProxyConfiguration.builder()
-                    .type(Property.of(Proxy.Type.HTTP))
-                    .address(Property.of(proxy.getHost()))
-                    .username(Property.of("pr0xy"))
-                    .password(Property.of("p4ss"))
-                    .port(Property.of(proxy.getFirstMappedPort()))
-                    .build())
-                .build()))
+        try (
+            HttpClient client = client(
+                b -> b
+                    .configuration(
+                        HttpConfiguration.builder()
+                            .proxy(
+                                ProxyConfiguration.builder()
+                                    .type(Property.ofValue(Proxy.Type.HTTP))
+                                    .address(Property.ofValue(proxy.getHost()))
+                                    .username(Property.ofValue("pr0xy"))
+                                    .password(Property.ofValue("p4ss"))
+                                    .port(Property.ofValue(proxy.getFirstMappedPort()))
+                                    .build()
+                            )
+                            .build()
+                    )
+            )
         ) {
             HttpResponse<String> response = client.request(
                 HttpRequest.of(URI.create("https://www.google.com")),
                 String.class
             );
 
-            assertThat(response.getStatus().getCode(), is(200));
-            assertThat(response.getBody(), containsString("<html"));
+            assertThat(response.getStatus().getCode()).isEqualTo(200);
+            assertThat(response.getBody()).contains("<html");
+        }
+    }
+
+    @Test
+    void shouldReturnResponseForAllowedResponseCode() throws IOException, IllegalVariableEvaluationException, HttpClientException {
+        try (HttpClient client = client(b -> b.configuration(HttpConfiguration.builder().allowedResponseCodes(Property.ofValue(List.of(404))).build()))) {
+            HttpResponse<Map<String, String>> response = client.request(HttpRequest.of(URI.create(embeddedServerUri + "/http/error?status=404")));
+
+            assertThat(response.getStatus().getCode()).isEqualTo(404);
+        }
+    }
+
+    @Test
+    void shouldThrowExceptionForNotAllowedResponseCode() throws IOException, IllegalVariableEvaluationException {
+        try (HttpClient client = client(b -> b.configuration(HttpConfiguration.builder().allowedResponseCodes(Property.ofValue(List.of(404))).build()))) {
+            URI uri = URI.create(embeddedServerUri + "/http/error?status=405");
+
+            HttpClientResponseException e = assertThrows(HttpClientResponseException.class, () ->
+            {
+                client.request(HttpRequest.of(uri));
+            });
+
+            assertThat(Objects.requireNonNull(e.getResponse()).getStatus().getCode()).isEqualTo(405);
+        }
+    }
+
+    @Test
+    void shouldSucceedWithTcpExtendedKeepAliveDisabled() throws IllegalVariableEvaluationException, HttpClientException, IOException {
+        // Given - extended TCP keep-alive disabled (fix for Windows workers)
+        try (HttpClient client = client(b -> b.configuration(
+            HttpConfiguration.builder()
+                .enabledTcpExtendedKeepAlive(Property.ofValue(false))
+                .build()
+        ))) {
+            // When
+            HttpResponse<String> response = client.request(
+                HttpRequest.of(URI.create(embeddedServerUri + "/http/text")),
+                String.class
+            );
+
+            // Then
+            assertThat(response.getStatus().getCode()).isEqualTo(200);
+            assertThat(response.getBody()).isEqualTo("pong");
+        }
+    }
+
+    @Test
+    void testSseRequestWithText() throws Exception {
+        List<HttpSseEvent<String>> consumedEvents = new CopyOnWriteArrayList<>();
+
+        try (HttpClient client = client()) {
+            HttpResponse<Void> response = client.sseRequest(
+                HttpRequest.of(URI.create(embeddedServerUri + "/http/sse/simple")),
+                String.class,
+                consumedEvents::add
+            );
+
+            assertThat(response.getStatus().getCode()).isEqualTo(200);
+            assertThat(response.contentType()).isEqualTo("text/event-stream");
+            assertThat(consumedEvents).hasSize(3);
+            assertThat(consumedEvents.get(0).data()).isEqualTo("Event 1");
+            assertThat(consumedEvents.get(1).data()).isEqualTo("Event 2");
+            assertThat(consumedEvents.get(2).data()).isEqualTo("Event 3");
+        }
+    }
+
+    @Test
+    void testSseRequestWithJson() throws Exception {
+        List<HttpSseEvent<CustomObject>> consumedEvents = new CopyOnWriteArrayList<>();
+
+        try (HttpClient client = client()) {
+            HttpResponse<Void> response = client.sseRequest(
+                HttpRequest.of(URI.create(embeddedServerUri + "/http/sse/json")),
+                CustomObject.class,
+                consumedEvents::add
+            );
+
+            assertThat(response.getStatus().getCode()).isEqualTo(200);
+            assertThat(response.contentType()).isEqualTo("text/event-stream");
+            assertThat(consumedEvents).hasSize(2);
+            assertThat(consumedEvents.get(0).data().id()).isEqualTo("1");
+            assertThat(consumedEvents.get(0).data().name()).isEqualTo("Hello");
+            assertThat(consumedEvents.get(1).data().id()).isEqualTo("2");
+            assertThat(consumedEvents.get(1).data().name()).isEqualTo("World");
         }
     }
 
@@ -431,42 +569,67 @@ class HttpClientTest {
                 .body(Map.of("status", status));
         }
 
+        @Post("error")
+        public io.micronaut.http.HttpResponse<Object> postErrors(@QueryValue int status, @Body String body) {
+            return io.micronaut.http.HttpResponse
+                .status(HttpStatus.valueOf(status))
+                .body(Map.of("status", status));
+        }
+
         @ExecuteOn(TaskExecutors.IO)
         @Post(uri = "multipart", consumes = MediaType.MULTIPART_FORM_DATA)
         public io.micronaut.http.HttpResponse<Object> multipartPost(@Body MultipartBody body) {
-            Map<String, String> result = Flux.from(body)
-                .<AbstractMap.SimpleEntry<String, String>>handle((input, sink) -> {
-                    if (input instanceof CompletedFileUpload fileUpload) {
-                        try {
-                            try (var inputStream = fileUpload.getInputStream()) {
-                                sink.next(new AbstractMap.SimpleEntry<>(
+            Map<String, String> result = Flux.from(body).<AbstractMap.SimpleEntry<String, String>> handle((input, sink) ->
+            {
+                if (input instanceof CompletedFileUpload fileUpload) {
+                    try {
+                        try (var inputStream = fileUpload.getInputStream()) {
+                            sink.next(
+                                new AbstractMap.SimpleEntry<>(
                                     fileUpload.getName(),
                                     IOUtils.toString(inputStream, StandardCharsets.UTF_8)
-                                ));
-                            }
-                        } catch (IOException e) {
-                            fileUpload.discard();
-                            sink.error(e);
+                                )
+                            );
                         }
-                    } else {
-                        try {
-                            sink.next(new AbstractMap.SimpleEntry<>(input.getName(), new String(input.getBytes())));
-                        } catch (IOException e) {
-                            sink.error(e);
-                        }
+                    } catch (IOException e) {
+                        fileUpload.discard();
+                        sink.error(e);
                     }
-                })
+                } else {
+                    try {
+                        sink.next(new AbstractMap.SimpleEntry<>(input.getName(), new String(input.getBytes())));
+                    } catch (IOException e) {
+                        sink.error(e);
+                    }
+                }
+            })
                 .collectMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue)
                 .block();
 
             return io.micronaut.http.HttpResponse.ok(result);
         }
+
+        @Get(uri = "sse/simple", produces = MediaType.TEXT_EVENT_STREAM)
+        public Flux<String> sseSimple() {
+            return Flux.just(
+                "data: Event 1\n\n",
+                "data: Event 2\n\n",
+                "data: Event 3\n\n"
+            );
+        }
+
+        @Get(uri = "sse/json", produces = MediaType.TEXT_EVENT_STREAM)
+        public Flux<String> sseJson() {
+            return Flux.just(
+                "data: {\"name\": \"Hello\", \"id\": 1}\n\n",
+                "data: {\"name\": \"World\", \"id\": 2}\n\n"
+            );
+        }
     }
 
     @Builder
-    @Value
-    public static class CustomObject {
-        String id;
-        String name;
+    public record CustomObject(
+        String id,
+        String name) {
     }
 }

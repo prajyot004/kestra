@@ -1,23 +1,25 @@
 package io.kestra.core.trace;
 
+import java.util.Map;
+
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.runners.RunContext;
+
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
-
-import java.util.Map;
 
 public final class TraceUtils {
     public static final AttributeKey<String> ATTR_UID = AttributeKey.stringKey("kestra.uid");
 
-    private static final AttributeKey<String> ATTR_TENANT_ID = AttributeKey.stringKey("kestra.tenantId");
-    private static final AttributeKey<String> ATTR_NAMESPACE = AttributeKey.stringKey("kestra.namespace");
-    private static final AttributeKey<String> ATTR_FLOW_ID = AttributeKey.stringKey("kestra.flowId");
-    private static final AttributeKey<String> ATTR_EXECUTION_ID = AttributeKey.stringKey("kestra.executionId");
+    public static final AttributeKey<String> ATTR_TENANT_ID = AttributeKey.stringKey("kestra.tenantId");
+    public static final AttributeKey<String> ATTR_NAMESPACE = AttributeKey.stringKey("kestra.namespace");
+    public static final AttributeKey<String> ATTR_FLOW_ID = AttributeKey.stringKey("kestra.flowId");
+    public static final AttributeKey<String> ATTR_EXECUTION_ID = AttributeKey.stringKey("kestra.executionId");
 
     public static final AttributeKey<String> ATTR_SOURCE = AttributeKey.stringKey("kestra.source");
 
-    private TraceUtils() {}
+    private TraceUtils() {
+    }
 
     public static Attributes attributesFrom(Execution execution) {
         var builder = Attributes.builder()
@@ -36,12 +38,15 @@ public final class TraceUtils {
     public static Attributes attributesFrom(RunContext runContext) {
         var flowInfo = runContext.flowInfo();
         var execution = (Map<String, Object>) runContext.getVariables().get("execution");
-        var executionId = (String) execution.get("id");
+        var executionId = execution != null ? (String) execution.get("id") : null;
 
         var builder = Attributes.builder()
             .put(ATTR_NAMESPACE, flowInfo.namespace())
-            .put(ATTR_FLOW_ID, flowInfo.id())
-            .put(ATTR_EXECUTION_ID, executionId);
+            .put(ATTR_FLOW_ID, flowInfo.id());
+
+        if (executionId != null) {
+            builder.put(ATTR_EXECUTION_ID, executionId);
+        }
 
         if (flowInfo.tenantId() != null) {
             builder.put(ATTR_TENANT_ID, flowInfo.tenantId());

@@ -1,6 +1,5 @@
 package io.kestra.core.utils;
 
-
 /**
  * Utility method for manipulating Exception.
  */
@@ -21,5 +20,19 @@ public interface Exceptions {
         }
 
         return limitedStackTrace.toString();
+    }
+
+    /**
+     * Throws a {@code Throwable} only if it is considered as "fatal" error.
+     *
+     * @param t the exception to evaluate.
+     */
+    static void throwIfFatal(Throwable t) {
+        if (t == null) {
+            return;
+        }
+        if (t instanceof VirtualMachineError error) {
+            throw error;
+        }
     }
 }

@@ -1,14 +1,14 @@
 package io.kestra.core.runners;
 
+import java.nio.file.Path;
+
+import org.junit.jupiter.api.Test;
+
 import io.micronaut.context.annotation.Property;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
-import org.junit.jupiter.api.Test;
 
-import java.nio.file.Path;
-
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import static org.assertj.core.api.Assertions.assertThat;
 
 @MicronautTest
 @Property(name = "kestra.tasks.tmp-dir.path", value = "/tmp/sub/dir/tmp/")
@@ -24,6 +24,6 @@ class WorkingDirFactoryTest {
         // When
         Path path = workingDirectory.path();
         // Then
-        assertThat(path.toFile().getAbsolutePath().startsWith("/tmp/sub/dir/tmp/"), is(true));
+        assertThat(path.toFile().getAbsolutePath().startsWith("/tmp/sub/dir/tmp/")).isTrue();
     }
 }

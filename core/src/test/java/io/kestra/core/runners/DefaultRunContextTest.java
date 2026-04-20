@@ -1,20 +1,22 @@
 package io.kestra.core.runners;
 
+import java.security.GeneralSecurityException;
+import java.util.Map;
+
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+import io.kestra.core.context.TestRunContextFactory;
 import io.kestra.core.encryption.EncryptionService;
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.models.tasks.common.EncryptedString;
+
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.annotation.Value;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
-import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.Test;
 
-import java.security.GeneralSecurityException;
-import java.util.Map;
-
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import static org.assertj.core.api.Assertions.assertThat;
 
 @MicronautTest
 class DefaultRunContextTest {
@@ -26,7 +28,7 @@ class DefaultRunContextTest {
     private String secretKey;
 
     @Inject
-    private RunContextFactory runContextFactory;
+    private TestRunContextFactory runContextFactory;
 
     @Test
     void shouldGetKestraVersion() {
@@ -40,10 +42,12 @@ class DefaultRunContextTest {
         RunContext runContext = runContextFactory.of();
 
         String encryptedSecret = EncryptionService.encrypt(secretKey, "It's a secret");
-        Map<String, Object> variables = Map.of("test", "test",
-            "secret", Map.of("type", EncryptedString.TYPE, "value", encryptedSecret));
+        Map<String, Object> variables = Map.of(
+            "test", "test",
+            "secret", Map.of("type", EncryptedString.TYPE, "value", encryptedSecret)
+        );
 
         String render = runContext.render("What ? {{secret}}", variables);
-        assertThat(render, is(("What ? It's a secret")));
+        assertThat(render).isEqualTo(("What ? It's a secret"));
     }
 }

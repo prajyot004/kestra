@@ -1,15 +1,15 @@
 package io.kestra.webserver.utils;
 
-import io.micronaut.data.model.Pageable;
-import io.micronaut.data.model.Sort;
-import org.junit.jupiter.api.Test;
-
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Function;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import org.junit.jupiter.api.Test;
+
+import io.micronaut.data.model.Pageable;
+import io.micronaut.data.model.Sort;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PageableUtilsTest {
@@ -24,11 +24,11 @@ class PageableUtilsTest {
 
         assertFalse(pagedSortedMapped.isUnpaged());
         assertTrue(pagedSortedMapped.isSorted());
-        assertThat(pagedSortedMapped.getSort().getOrderBy().getFirst(), is(Sort.Order.asc("KEY")));
+        assertThat(pagedSortedMapped.getSort().getOrderBy().getFirst()).isEqualTo(Sort.Order.asc("KEY"));
 
         assertFalse(pagedSorted.isUnpaged());
         assertTrue(pagedSorted.isSorted());
-        assertThat(pagedSorted.getSort().getOrderBy().getFirst(), is(Sort.Order.asc("key")));
+        assertThat(pagedSorted.getSort().getOrderBy().getFirst()).isEqualTo(Sort.Order.asc("key"));
 
         assertFalse(paged.isUnpaged());
         assertFalse(paged.isSorted());

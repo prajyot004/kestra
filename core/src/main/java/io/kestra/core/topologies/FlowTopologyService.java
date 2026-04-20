@@ -1,8 +1,17 @@
 package io.kestra.core.topologies;
 
+import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+import com.google.common.annotations.VisibleForTesting;
+
 import io.kestra.core.models.Label;
 import io.kestra.core.models.conditions.Condition;
 import io.kestra.core.models.executions.Execution;
+import io.kestra.core.models.flows.Flow;
+import io.kestra.core.models.flows.FlowInterface;
 import io.kestra.core.models.flows.FlowWithSource;
 import io.kestra.core.models.hierarchies.Graph;
 import io.kestra.core.models.tasks.ExecutableTask;
@@ -15,21 +24,18 @@ import io.kestra.core.repositories.FlowRepositoryInterface;
 import io.kestra.core.repositories.FlowTopologyRepositoryInterface;
 import io.kestra.core.services.ConditionService;
 import io.kestra.core.utils.ListUtils;
+import io.kestra.core.utils.MapUtils;
 import io.kestra.plugin.core.condition.*;
+
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.*;
-import java.util.function.Function;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
-
 @Slf4j
 @Singleton
 public class FlowTopologyService {
-    public static final Label SIMULATED_EXECUTION = new Label(Label.SYSTEM_PREFIX + "simulatedExecution", "true");
+    public static final Label SIMULATED_EXECUTION = new Label(Label.SIMULATED_EXECUTION, "true");
 
     @Inject
     protected ConditionService conditionService;
@@ -44,10 +50,10 @@ public class FlowTopologyService {
         Graph<FlowNode, FlowRelation> graph = new Graph<>();
 
         flows
-            .forEach(flowTopology -> {
+            .forEach(flowTopology ->
+            {
                 FlowNode source = anonymize.apply(flowTopology.getSource());
                 FlowNode destination = anonymize.apply(flowTopology.getDestination());
-
 
                 if (!graph.nodes().contains(source)) {
                     graph.addNode(source);
@@ -66,27 +72,28 @@ public class FlowTopologyService {
     }
 
     public FlowTopologyGraph namespaceGraph(String tenantId, String namespace) {
-        List<FlowTopology> flowTopologies = flowTopologyRepository.findByNamespace(tenantId, namespace);
+        List<FlowTopology> flowTopologies = flowTopologyRepository.findByNamespacePrefix(tenantId, namespace);
 
         FlowTopologyGraph graph = this.graph(flowTopologies.stream(), (flowNode -> flowNode));
 
-        List<String> flowInGraph = graph.
-            getNodes()
+        List<String> flowInGraph = graph.getNodes()
             .stream()
             .map(FlowNode::getId)
             .distinct()
             .toList();
 
-        Set<FlowNode> existingNodes = new HashSet<>(graph
-            .getNodes()
-            .stream()
-            .collect(Collectors.toMap(node -> node.getId() + "_" + node.getNamespace(), Function.identity(), (node1, node2) -> node1))
-            .values()
+        Set<FlowNode> existingNodes = new HashSet<>(
+            graph
+                .getNodes()
+                .stream()
+                .collect(Collectors.toMap(node -> node.getId() + "_" + node.getNamespace(), Function.identity(), (node1, node2) -> node1))
+                .values()
         );
 
         Set<FlowNode> newNodes = new HashSet<>();
 
-        flowRepository.findByNamespace(tenantId, namespace).forEach(flow -> {
+        flowRepository.findByNamespace(tenantId, namespace).forEach(flow ->
+        {
             if (flowInGraph.contains(flow.getId())) {
                 return;
             }
@@ -111,10 +118,12 @@ public class FlowTopologyService {
 
     public Stream<FlowTopology> topology(FlowWithSource child, List<FlowWithSource> allFlows) {
         return allFlows.stream()
-            .flatMap(parent -> Stream.concat(
-                Stream.ofNullable(this.map(parent, child)),
-                Stream.ofNullable(this.map(child, parent))
-            ))
+            .flatMap(
+                parent -> Stream.concat(
+                    Stream.ofNullable(this.map(parent, child)),
+                    Stream.ofNullable(this.map(child, parent))
+                )
+            )
             .filter(Objects::nonNull);
     }
 
@@ -140,7 +149,8 @@ public class FlowTopologyService {
     }
 
     @Nullable
-    public FlowRelation isChild(FlowWithSource parent, FlowWithSource child) {
+    @VisibleForTesting
+    public FlowRelation isChild(Flow parent, Flow child) {
         if (this.isFlowTaskChild(parent, child)) {
             return FlowRelation.FLOW_TASK;
         }
@@ -152,15 +162,15 @@ public class FlowTopologyService {
         return null;
     }
 
-    protected boolean isFlowTaskChild(FlowWithSource parent, FlowWithSource child) {
+    protected boolean isFlowTaskChild(Flow parent, Flow child) {
         try {
             return parent
                 .allTasksWithChilds()
                 .stream()
                 .filter(t -> t instanceof ExecutableTask)
                 .map(t -> (ExecutableTask<?>) t)
-                .anyMatch(t ->
-                    t.subflowId() != null && t.subflowId().namespace().equals(child.getNamespace()) && t.subflowId().flowId().equals(child.getId())
+                .anyMatch(
+                    t -> t.subflowId() != null && t.subflowId().namespace().equals(child.getNamespace()) && t.subflowId().flowId().equals(child.getId())
                 );
         } catch (Exception e) {
             log.warn("Failed to detect flow task on namespace:'{}', flowId:'{}'", parent.getNamespace(), parent.getId(), e);
@@ -168,11 +178,8 @@ public class FlowTopologyService {
         }
     }
 
-    protected boolean isTriggerChild(FlowWithSource parent, FlowWithSource child) {
+    protected boolean isTriggerChild(Flow parent, Flow child) {
         List<AbstractTrigger> triggers = ListUtils.emptyOnNull(child.getTriggers());
-
-        // simulated execution: we add a "simulated" label so conditions can know that the evaluation is for a simulated execution
-        Execution execution = Execution.newExecution(parent, (f, e) -> null, List.of(SIMULATED_EXECUTION), Optional.empty());
 
         // keep only flow trigger
         List<io.kestra.plugin.core.trigger.Flow> flowTriggers = triggers
@@ -185,18 +192,24 @@ public class FlowTopologyService {
             return false;
         }
 
-        boolean conditionMatch =  flowTriggers
+        // simulated execution: we add a "simulated" label so conditions can know that the evaluation is for a simulated execution
+        Execution execution = Execution.newExecution(parent, (f, e) -> null, List.of(SIMULATED_EXECUTION), Optional.empty());
+
+        boolean conditionMatch = flowTriggers
             .stream()
             .flatMap(flow -> ListUtils.emptyOnNull(flow.getConditions()).stream())
             .allMatch(condition -> validateCondition(condition, parent, execution));
 
         boolean preconditionMatch = flowTriggers.stream()
-            .anyMatch(flow -> flow.getPreconditions() == null || validateMultipleConditions(flow.getPreconditions().getConditions(), parent, execution));
+            .anyMatch(flow -> flow.getPreconditions() == null || validatePreconditions(flow.getPreconditions(), parent, execution));
 
-        return conditionMatch && preconditionMatch;
+        boolean dependsOnMatch = flowTriggers.stream()
+            .anyMatch(flow -> ListUtils.isEmpty(flow.getDependsOn()) || validateDependsOn(flow.getDependsOn(), parent, execution));
+
+        return conditionMatch && dependsOnMatch && preconditionMatch;
     }
 
-    private boolean validateCondition(Condition condition, FlowWithSource child, Execution execution) {
+    private boolean validateCondition(Condition condition, FlowInterface child, Execution execution) {
         if (isFilterCondition(condition)) {
             return true;
         }
@@ -205,35 +218,57 @@ public class FlowTopologyService {
             return validateMultipleConditions(multipleCondition.getConditions(), child, execution);
         }
 
-        return this.conditionService.isValid(condition, child, execution);
+        try {
+            return this.conditionService.isValid(condition, child, execution);
+        } catch (Exception e) {
+            // extra safety net, it means there is a bug
+            log.error("unable to validate condition in FlowTopologyService, flow: {}, condition: {}", child.uid(), condition, e);
+            return false;
+        }
     }
 
-    private boolean validateMultipleConditions(Map<String, Condition> multipleConditions, FlowWithSource child, Execution execution) {
+    private boolean validateMultipleConditions(Map<String, Condition> multipleConditions, FlowInterface child, Execution execution) {
         List<Condition> conditions = multipleConditions
             .values()
             .stream()
             .filter(c -> !isFilterCondition(c))
             .toList();
 
-
         return (conditions
             .stream()
             .filter(c -> !isMandatoryMultipleCondition(c))
-            .anyMatch(c -> validateCondition(c, child, execution))
-        ) && (
-            conditions
+            .anyMatch(c -> validateCondition(c, child, execution)))
+            && (conditions
                 .stream()
                 .filter(this::isMandatoryMultipleCondition)
-                .allMatch(c -> validateCondition(c, child, execution))
-        );
+                .allMatch(c -> validateCondition(c, child, execution)));
     }
 
     private boolean isMandatoryMultipleCondition(Condition condition) {
-        return Stream
-            .of(
-                Expression.class
-            )
-            .anyMatch(aClass -> condition.getClass().isAssignableFrom(aClass));
+        return condition.getClass().isAssignableFrom(Expression.class);
+    }
+
+    private boolean validatePreconditions(io.kestra.plugin.core.trigger.Flow.Preconditions preconditions, FlowInterface child, Execution execution) {
+        boolean upstreamFlowMatched = MapUtils.emptyOnNull(preconditions.getUpstreamFlowsConditions())
+            .values()
+            .stream()
+            .filter(c -> !isFilterCondition(c))
+            .anyMatch(c -> validateCondition(c, child, execution));
+
+        boolean whereMatched = MapUtils.emptyOnNull(preconditions.getWhereConditions())
+            .values()
+            .stream()
+            .filter(c -> !isFilterCondition(c))
+            .allMatch(c -> validateCondition(c, child, execution));
+
+        // to be a dependency, if upstream flow is set it must be either inside it so it's a AND between upstream flow and where
+        return upstreamFlowMatched && whereMatched;
+    }
+
+    private boolean validateDependsOn(List<io.kestra.plugin.core.trigger.Flow.Dependency> dependsOn, FlowInterface child, Execution execution) {
+        return ListUtils.emptyOnNull(dependsOn)
+            .stream()
+            .anyMatch(c -> validateCondition(c.asCondition(), child, execution));
     }
 
     private boolean isFilterCondition(Condition condition) {

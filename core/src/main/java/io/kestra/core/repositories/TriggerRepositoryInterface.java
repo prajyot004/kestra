@@ -1,36 +1,64 @@
 package io.kestra.core.repositories;
 
-import io.kestra.core.models.QueryFilter;
-import io.kestra.core.models.executions.Execution;
-import io.kestra.core.models.triggers.Trigger;
-import io.kestra.core.models.triggers.TriggerContext;
-import io.micronaut.data.model.Pageable;
-import jakarta.annotation.Nullable;
-import reactor.core.publisher.Flux;
-
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
 
-public interface TriggerRepositoryInterface {
-    Optional<Trigger> findLast(TriggerContext trigger);
+import io.kestra.core.models.QueryFilter;
+import io.kestra.core.models.triggers.Trigger;
+import io.kestra.core.models.triggers.TriggerId;
+import io.kestra.core.scheduler.model.TriggerState;
+import io.kestra.plugin.core.dashboard.data.Triggers;
 
-    Optional<Trigger> findByExecution(Execution execution);
+import io.micronaut.data.model.Pageable;
+import jakarta.annotation.Nullable;
+import reactor.core.publisher.Flux;
 
-    List<Trigger> findAll(String tenantId);
+/**
+ * Repository interface for searching for trigger states.
+ */
+public interface TriggerRepositoryInterface extends QueryBuilderInterface<Triggers.Fields> {
+    /**
+     * Finds the trigger state for the given identifier.
+     *
+     * @param trigger the identifier.
+     * @return an optional {@link TriggerState}.
+     */
+    Optional<TriggerState> findById(TriggerId trigger);
 
-    List<Trigger> findAllForAllTenants();
+    /**
+     * Finds all trigger states for the given tenant id
+     *
+     * @param tenantId the tenant identifier - cannot be {@code null}
+     * @return the list of trigger states.
+     */
+    List<TriggerState> findAll(String tenantId);
 
-    Trigger save(Trigger trigger);
+    /**
+     * Finds all trigger states across all tenants.
+     *
+     * @return the list of trigger states.
+     */
+    List<TriggerState> findAllForAllTenants();
 
-    void delete(Trigger trigger);
+    /**
+     * Searches for all trigger states matching the given criterion.
+     *
+     * @param from the pageable.
+     * @param tenantId the tenant identifier - cannot be {@code null}
+     * @return the list of matching trigger states.
+     */
+    ArrayListTotal<TriggerState> find(Pageable from, String query, String tenantId, String namespace, String flowId, String workerId);
 
-    Trigger update(Trigger trigger);
-
-    Trigger lock(String triggerUid, Function<Trigger, Trigger> function);
-
-    ArrayListTotal<Trigger> find(Pageable from, String query, String tenantId, String namespace, String flowId, String workerId);
-    ArrayListTotal<Trigger> find(Pageable from, String tenantId, List<QueryFilter> filters);
+    /**
+     * Searches for all trigger states matching the given tenant and filters.
+     *
+     * @param from the pageable.
+     * @param tenantId the tenant identifier - cannot be {@code null}
+     * @param filters the query filters.
+     * @return the list of matching trigger states.
+     */
+    ArrayListTotal<TriggerState> find(Pageable from, String tenantId, List<QueryFilter> filters);
 
     /**
      * Counts the total number of triggers.
@@ -38,29 +66,21 @@ public interface TriggerRepositoryInterface {
      * @param tenantId the tenant of the triggers
      * @return The count.
      */
-    int count(@Nullable String tenantId);
-
-    /**
-     * Counts the total number of triggers for the given namespace.
-     *
-     * @param tenantId  the tenant of the triggers
-     * @param namespace the namespace
-     * @return The count.
-     */
-    int countForNamespace(@Nullable String tenantId, @Nullable String namespace);
+    long countAll(@Nullable String tenantId);
 
     /**
      * Find all triggers that match the query, return a flux of triggers
-     * as the search is not paginated
-     * @param query the query to search for
-     * @param tenantId the tenant of the triggers
-     * @param namespace the parent namespace of the triggers
-     * @return A flux of triggers
      */
-    Flux<Trigger> find(String query, String tenantId, String namespace);
+    Flux<TriggerState> find(String tenantId, List<QueryFilter> filters);
 
     default Function<String, String> sortMapping() throws IllegalArgumentException {
         return Function.identity();
     }
-}
 
+    /**
+     * FOR KESTRA 2.0 MIGRATION
+     */
+    @SuppressWarnings("removal")
+    @Deprecated(forRemoval = true)
+    List<Trigger> findAllForAllTenantsV1();
+}

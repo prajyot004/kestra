@@ -1,8 +1,10 @@
 package io.kestra.plugin.core.execution;
 
+import java.time.ZonedDateTime;
+import java.util.List;
+
 import io.kestra.core.models.annotations.Example;
 import io.kestra.core.models.annotations.Plugin;
-import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.flows.State;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
@@ -10,14 +12,11 @@ import io.kestra.core.models.tasks.Task;
 import io.kestra.core.runners.DefaultRunContext;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.services.ExecutionService;
-import io.kestra.core.services.FlowService;
+
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
-
-import java.time.ZonedDateTime;
-import java.util.List;
 
 @SuperBuilder
 @ToString
@@ -26,95 +25,110 @@ import java.util.List;
 @NoArgsConstructor
 @Schema(
     title = "Purge executions, logs, metrics, and storage files.",
-    description = "This task can be used to purge flow executions data for all flows, for a specific namespace, or for a specific flow."
+    description = """
+        Deletes historical execution data by namespace/flow, bounded by `startDate`/`endDate`, and optionally filtered by states. Each category can be toggled (`purgeExecution`, `purgeLog`, `purgeMetric`, `purgeStorage`).
+
+        Respects Namespace authorization checks (there must be purge rights on the target namespace); default batch size is 100. Irreversible — use carefully in production."""
 )
 @Plugin(
     examples = {
         @Example(
             title = "Purge all flow execution data for flows that ended more than one month ago.",
-            code = {
-                "endDate: \"{{ now() | dateAdd(-1, 'MONTHS') }}\"",
-                "states: ",
-                " - KILLED",
-                " - FAILED",
-                " - WARNING",
-                " - SUCCESS"
-            }
+            code = """
+                id: purge_exections
+                namespace: system
+
+                tasks:
+                  - id: purge
+                    type: io.kestra.plugin.core.execution.PurgeExecutions
+                    endDate: "{{ now() | dateAdd(-1, 'MONTHS') }}"
+                    states:
+                      - KILLED
+                      - FAILED
+                      - WARNING
+                      - SUCCESS
+                """
         )
-    },
-    aliases = {"io.kestra.core.tasks.storages.Purge", "io.kestra.plugin.core.storage.Purge"}
+    }
 )
 public class PurgeExecutions extends Task implements RunnableTask<PurgeExecutions.Output> {
     @Schema(
-        title = "Namespace whose flows need to be purged, or namespace of the flow that needs to be purged.",
+        title = "Namespace whose flows need to be purged, or namespace of the flow that needs to be purged",
         description = "If `flowId` isn't provided, this is a namespace prefix, else the namespace of the flow."
     )
     private Property<String> namespace;
 
     @Schema(
-        title = "The flow ID to be purged.",
+        title = "The flow ID to be purged",
         description = "You need to provide the `namespace` properties if you want to purge a flow."
     )
     private Property<String> flowId;
 
     @Schema(
-        title = "The minimum date to be purged.",
+        title = "The date after which data should be purged",
         description = "All data of flows executed after this date will be purged."
     )
     private Property<String> startDate;
 
     @Schema(
-        title = "The maximum date to be purged.",
+        title = "The date before which data should be purged.",
         description = "All data of flows executed before this date will be purged."
     )
     @NotNull
     private Property<String> endDate;
 
     @Schema(
-        title = "The state of the executions to be purged.",
+        title = "The state of the executions to be purged",
         description = "If not set, executions for any states will be purged."
     )
     private Property<List<State.Type>> states;
 
     @Schema(
-        title = "Whether to purge executions."
+        title = "Flag specifying whether to purge executions"
     )
     @Builder.Default
-    private Property<Boolean> purgeExecution = Property.of(true);
+    private Property<Boolean> purgeExecution = Property.ofValue(true);
 
     @Schema(
-        title = "Whether to purge execution's logs.",
+        title = "Flag specifying whether to purge execution logs",
         description = """
-            This will only purge logs from executions not from triggers, and it will do it execution by execution.
-            The `io.kestra.plugin.core.log.PurgeLogs` task is a better fit to purge logs as it will purge logs in bulk, and will also purge logs not tied to an execution like trigger logs."""
+            This will only purge logs from executions, not from triggers, and it will do it execution by execution.
+            The `io.kestra.plugin.core.log.PurgeLogs` task is a better fit to purge, as it will purge logs in bulk and will also purge logs not tied to an execution like trigger logs."""
     )
     @Builder.Default
-    private Property<Boolean> purgeLog = Property.of(true);
+    private Property<Boolean> purgeLog = Property.ofValue(true);
 
     @Schema(
-        title = "Whether to purge execution's metrics."
+        title = "Flag specifying whether to purge execution's metrics."
     )
     @Builder.Default
-    private Property<Boolean> purgeMetric = Property.of(true);
+    private Property<Boolean> purgeMetric = Property.ofValue(true);
 
     @Schema(
-        title = "Whether to purge execution's files from the Kestra's internal storage."
+        title = "Flag specifying whether to purge execution's files from the Kestra's internal storage"
     )
     @Builder.Default
-    private Property<Boolean> purgeStorage = Property.of(true);
+    private Property<Boolean> purgeStorage = Property.ofValue(true);
+
+    @Schema(
+        title = "The size of the bulk delete",
+        description = "Deletion is done in batches of this many executions (default 100). If executions have a large number of logs, use `PurgeLogs` instead to control how many log rows are deleted per transaction."
+    )
+    @Builder.Default
+    @NotNull
+    private Property<Integer> batchSize = Property.ofValue(100);
 
     @Override
     public PurgeExecutions.Output run(RunContext runContext) throws Exception {
-        ExecutionService executionService = ((DefaultRunContext)runContext).getApplicationContext().getBean(ExecutionService.class);
-        FlowService flowService = ((DefaultRunContext)runContext).getApplicationContext().getBean(FlowService.class);
+        ExecutionService executionService = ((DefaultRunContext) runContext).services().additionalService(ExecutionService.class);
 
         // validate that this namespace is authorized on the target namespace / all namespaces
         var flowInfo = runContext.flowInfo();
         String renderedNamespace = runContext.render(this.namespace).as(String.class).orElse(null);
-        if (renderedNamespace == null){
-            flowService.checkAllowedAllNamespaces(flowInfo.tenantId(), flowInfo.tenantId(), flowInfo.namespace());
+        if (renderedNamespace == null) {
+            runContext.acl().allowAllNamespaces().check();
         } else if (!renderedNamespace.equals(flowInfo.namespace())) {
-            flowService.checkAllowedNamespace(flowInfo.tenantId(), renderedNamespace, flowInfo.tenantId(), flowInfo.namespace());
+            runContext.acl().allowNamespace(renderedNamespace).check();
         }
 
         ExecutionService.PurgeResult purgeResult = executionService.purge(
@@ -125,13 +139,15 @@ public class PurgeExecutions extends Task implements RunnableTask<PurgeExecution
             flowInfo.tenantId(),
             renderedNamespace,
             runContext.render(flowId).as(String.class).orElse(null),
-            startDate != null ? ZonedDateTime.parse(runContext.render(startDate).as(String.class).orElseThrow()) : null,
+            runContext.render(startDate).as(String.class).map(ZonedDateTime::parse).orElse(null),
             ZonedDateTime.parse(runContext.render(endDate).as(String.class).orElseThrow()),
-            this.states == null ? null : runContext.render(this.states).asList(State.Type.class)
+            this.states == null ? null : runContext.render(this.states).asList(State.Type.class),
+            runContext.render(this.batchSize).as(Integer.class).orElseThrow()
         );
 
         return Output.builder()
             .executionsCount(purgeResult.getExecutionsCount())
+            .taskOutputsCount(purgeResult.getTaskOutputsCount())
             .logsCount(purgeResult.getLogsCount())
             .storagesCount(purgeResult.getStoragesCount())
             .metricsCount(purgeResult.getMetricsCount())
@@ -142,22 +158,27 @@ public class PurgeExecutions extends Task implements RunnableTask<PurgeExecution
     @Getter
     public static class Output implements io.kestra.core.models.tasks.Output {
         @Schema(
-            title = "The count of deleted executions."
+            title = "The count of deleted executions"
         )
         private int executionsCount;
 
         @Schema(
-            title = "The count of deleted logs."
+            title = "The count of deleted task outputs"
+        )
+        private int taskOutputsCount;
+
+        @Schema(
+            title = "The count of deleted logs"
         )
         private int logsCount;
 
         @Schema(
-            title = "The count of deleted storage files."
+            title = "The count of deleted storage files"
         )
         private int storagesCount;
 
         @Schema(
-            title = "The count of deleted metrics."
+            title = "The count of deleted metrics"
         )
         private int metricsCount;
     }

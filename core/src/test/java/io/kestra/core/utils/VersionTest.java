@@ -1,11 +1,19 @@
 package io.kestra.core.utils;
 
+import java.util.List;
+
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
+import static org.assertj.core.api.Assertions.assertThatObject;
 
 class VersionTest {
+
+    @Test
+    void shouldCreateVersionFromIntegerGivenMajorVersion() {
+        Version version = Version.of(1);
+        Assertions.assertEquals(1, version.majorVersion());
+    }
 
     @Test
     void shouldCreateVersionFromStringGivenMajorVersion() {
@@ -21,27 +29,27 @@ class VersionTest {
     }
 
     @Test
-    void shouldCreateVersionFromStringGivenMajorMinorIncrementVersion() {
+    void shouldCreateVersionFromStringGivenMajorMinorPatchVersion() {
         Version version = Version.of("1.2.3");
         Assertions.assertEquals(1, version.majorVersion());
         Assertions.assertEquals(2, version.minorVersion());
-        Assertions.assertEquals(3, version.incrementalVersion());
+        Assertions.assertEquals(3, version.patchVersion());
     }
 
     @Test
-    void shouldCreateVersionFromPrefixedStringGivenMajorMinorIncrementVersion() {
+    void shouldCreateVersionFromPrefixedStringGivenMajorMinorPatchVersion() {
         Version version = Version.of("v1.2.3");
         Assertions.assertEquals(1, version.majorVersion());
         Assertions.assertEquals(2, version.minorVersion());
-        Assertions.assertEquals(3, version.incrementalVersion());
+        Assertions.assertEquals(3, version.patchVersion());
     }
 
     @Test
-    void shouldCreateVersionFromStringGivenMajorMinorIncrementAndQualifierVersion() {
+    void shouldCreateVersionFromStringGivenMajorMinorPatchAndQualifierVersion() {
         Version version = Version.of("1.2.3-SNAPSHOT");
         Assertions.assertEquals(1, version.majorVersion());
         Assertions.assertEquals(2, version.minorVersion());
-        Assertions.assertEquals(3, version.incrementalVersion());
+        Assertions.assertEquals(3, version.patchVersion());
         Assertions.assertEquals("SNAPSHOT", version.qualifier().toString());
     }
 
@@ -50,7 +58,7 @@ class VersionTest {
         Version version = Version.of("1.2.3-RC0-SNAPSHOT");
         Assertions.assertEquals(1, version.majorVersion());
         Assertions.assertEquals(2, version.minorVersion());
-        Assertions.assertEquals(3, version.incrementalVersion());
+        Assertions.assertEquals(3, version.patchVersion());
         Assertions.assertEquals("RC0-SNAPSHOT", version.qualifier().toString());
     }
 
@@ -58,7 +66,8 @@ class VersionTest {
     void shouldThrowIllegalArgumentGivenInvalidVersion() {
         IllegalArgumentException e = Assertions.assertThrows(
             IllegalArgumentException.class,
-            () -> Version.of("bad input"));
+            () -> Version.of("bad input")
+        );
 
         Assertions.assertEquals("Invalid version, cannot parse 'bad input'", e.getMessage());
     }
@@ -76,13 +85,13 @@ class VersionTest {
     }
 
     @Test
-    void shouldGetLatestVersionGivenMajorMinorIncrementalVersions() {
+    void shouldGetLatestVersionGivenMajorMinorPatchVersions() {
         Version result = Version.getLatest(Version.of("1.0.9"), Version.of("1.0.10"), Version.of("1.0.11"));
         Assertions.assertEquals(Version.of("1.0.11"), result);
     }
 
     @Test
-    public void shouldGetOldestVersionGivenMajorMinorIncrementalVersions() {
+    public void shouldGetOldestVersionGivenMajorMinorPatchVersions() {
         Version result = Version.getOldest(Version.of("1.0.9"), Version.of("1.0.10"), Version.of("1.0.11"));
         Assertions.assertEquals(Version.of("1.0.9"), result);
     }
@@ -135,14 +144,50 @@ class VersionTest {
     }
 
     @Test
-    public void shouldGetStableVersionGivenMajorMinorVersions() {
-        Version result = Version.getStable(Version.of("1.2.0"), List.of(Version.of("1.2.1"), Version.of("1.2.2"), Version.of("0.99.0")));
-        Assertions.assertEquals(Version.of("1.2.2"), result);
+    public void shouldGetStableVersionGivenMajorMinorPatchVersion() {
+        // Given
+        List<Version> versions = List.of(Version.of("1.2.1"), Version.of("1.2.3"), Version.of("0.99.0"));
+
+        // When - Then
+        assertThatObject(Version.getStable(Version.of("1.2.1"), versions)).isEqualTo(Version.of("1.2.1"));
+        assertThatObject(Version.getStable(Version.of("1.2.0"), versions)).isNull();
+        assertThatObject(Version.getStable(Version.of("1.2.4"), versions)).isNull();
     }
 
     @Test
-    public void shouldGetNullForStableVersionGivenNoCompatibleVersions() {
-        Version result = Version.getStable(Version.of("1.2.0"), List.of(Version.of("1.3.0"), Version.of("2.0.0"), Version.of("0.99.0")));
-        Assertions.assertNull(result);
+    public void shouldGetStableGivenMajorAndMinorVersionOnly() {
+        // Given
+        List<Version> versions = List.of(Version.of("1.2.1"), Version.of("1.2.3"), Version.of("0.99.0"));
+
+        // When - Then
+        assertThatObject(Version.getStable(Version.of("1.2"), versions)).isEqualTo(Version.of("1.2.3"));
+    }
+
+    @Test
+    public void shouldGetStableGivenMajorVersionOnly() {
+        // Given
+        List<Version> versions = List.of(Version.of("1.2.1"), Version.of("1.2.3"), Version.of("0.99.0"));
+
+        // When - Then
+        assertThatObject(Version.getStable(Version.of("1"), versions)).isEqualTo(Version.of("1.2.3"));
+    }
+
+    @Test
+    public void shouldGetNullForStableGivenMajorAndMinorVersionOnly() {
+        // Given
+        List<Version> versions = List.of(Version.of("1.2.1"), Version.of("1.2.3"), Version.of("0.99.0"));
+
+        // When - Then
+        assertThatObject(Version.getStable(Version.of("2.0"), versions)).isNull();
+        assertThatObject(Version.getStable(Version.of("0.1"), versions)).isNull();
+    }
+
+    @Test
+    public void shouldGetNullForStableGivenMajorVersionOnly() {
+        // Given
+        List<Version> versions = List.of(Version.of("1.2.1"), Version.of("1.2.3"), Version.of("0.99.0"));
+
+        // When - Then
+        assertThatObject(Version.getStable(Version.of("2"), versions)).isNull();
     }
 }

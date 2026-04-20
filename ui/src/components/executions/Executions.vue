@@ -1,11 +1,16 @@
 <template>
-    <top-nav-bar v-if="topbar" :title="routeInfo.title">
+    <TopNavBar v-if="topbar" :title="routeInfo.title">
         <template #additional-right v-if="displayButtons">
             <ul>
                 <template v-if="$route.name === 'executions/list'">
                     <li>
+                        <el-button :icon="Download" @click="exportExecutionsAsStream()">
+                            {{ $t('export_csv') }}
+                        </el-button>
+                    </li>
+                    <li>
                         <template v-if="hasAnyExecute">
-                            <trigger-flow />
+                            <TriggerFlow />
                         </template>
                     </li>
                 </template>
@@ -18,68 +23,67 @@
                         </template>
                     </li>
                     <li>
-                        <trigger-flow
-                            v-if="flow"
-                            :disabled="flow.disabled || isReadOnly"
-                            :flow-id="flow.id"
-                            :namespace="flow.namespace"
+                        <TriggerFlow
+                            v-if="flowStore.flow"
+                            :disabled="flowStore.flow?.disabled || isReadOnly"
+                            :flowId="flowStore.flow?.id"
+                            :namespace="flowStore.flow?.namespace"
                         />
                     </li>
                 </template>
             </ul>
         </template>
-    </top-nav-bar>
-    <section data-component="FILENAME_PLACEHOLDER" :class="{'container padding-bottom': topbar}" v-if="ready">
-        <data-table
+    </TopNavBar>
+    <section :class="{'container padding-bottom': topbar}" v-if="ready">
+        <DataTable
             @page-changed="onPageChanged"
             ref="dataTable"
-            :total="total"
-            :size="pageSize"
-            :page="pageNumber"
+            :total="executionsStore.total"
             :embed="embed"
         >
             <template #navbar v-if="isDisplayedTop">
-                <KestraFilter
-                    prefix="executions"
-                    :include="['namespace', 'state', 'scope', 'labels', 'child', 'relative_date', 'absolute_date']"
-                    :buttons="{
-                        refresh: {shown: true, callback: refresh},
-                        settings: {shown: true, charts: {shown: true, value: showChart, callback: onShowChartChange}}
-                    }"
-                    :properties-width="182"
+                <KSFilter
+                    :configuration="namespace === undefined || flowId === undefined ? executionFilter : flowExecutionFilter"
                     :properties="{
                         shown: true,
                         columns: optionalColumns,
                         displayColumns,
-                        storageKey: 'executions'
+                        storageKey: storageKey
+                    }"
+                    :prefix="'executions'"
+                    :tableOptions="{
+                        chart: {shown: true, value: showChart, callback: onShowChartChange},
+                        refresh: {shown: true, callback: refresh}
                     }"
                     @update-properties="updateDisplayColumns"
+                    :defaultScope="defaultScopeFilter"
                 />
             </template>
 
-            <template #top>
-                <el-card v-if="showStatChart()" class="mb-4 shadow">
-                    <ExecutionsBar v-if="daily" :data="daily" :total="executionsCount" />
-                </el-card>
+            <template v-if="showStatChart()" #top>
+                <Sections ref="dashboardComponent" :dashboard="{id: 'default', charts: []}" :charts showDefault class="mb-4" />
             </template>
 
-            <template #table v-if="executions?.length">
-                <select-table
+            <template #table>
+                <SelectTable
                     ref="selectTable"
-                    :data="executions"
-                    :default-sort="{prop: 'state.startDate', order: 'descending'}"
-                    table-layout="auto"
+                    :data="executionsStore.executions"
+                    :defaultSort="{prop: 'state.startDate', order: 'descending'}"
+                    tableLayout="auto"
                     fixed
-                    @row-dblclick="row => onRowDoubleClick(executionParams(row))"
+                    @row-click="(row: any) => onRowDoubleClick(executionParams(row))"
                     @sort-change="onSort"
                     @selection-change="handleSelectionChange"
                     :selectable="!hidden?.includes('selection') && canCheck"
+                    :no-data-text="$t('no_results.executions')"
+                    class="executions-table"
+                    :rowKey="(row: any) => row.id"
                 >
                     <template #select-actions>
-                        <bulk-select
-                            :select-all="queryBulkAction"
+                        <BulkSelect
+                            :selectAll="queryBulkAction"
                             :selections="selection"
-                            :total="total"
+                            :total="executionsStore.total"
                             @update:select-all="toggleAllSelection"
                             @unselect="toggleAllUnselected"
                         >
@@ -90,7 +94,7 @@
                             <el-button v-if="canUpdate" :icon="Restart" @click="restartExecutions()">
                                 {{ $t("restart") }}
                             </el-button>
-                            <el-button v-if="canCreate" :icon="PlayBoxMultiple" @click="replayExecutions()">
+                            <el-button v-if="canCreate" :icon="PlayBoxMultiple" @click="isOpenReplayModal = !isOpenReplayModal">
                                 {{ $t("replay") }}
                             </el-button>
                             <el-button v-if="canUpdate" :icon="StopCircleOutline" @click="killExecutions()">
@@ -100,7 +104,6 @@
                                 {{ $t("delete") }}
                             </el-button>
 
-                            <!-- Dropdown with additional actions -->
                             <el-dropdown>
                                 <el-button>
                                     <DotsVertical />
@@ -116,7 +119,7 @@
                                         <el-dropdown-item v-if="canUpdate" :icon="PauseBox" @click="pauseExecutions()">
                                             {{ $t("pause") }}
                                         </el-dropdown-item>
-                                        <el-dropdown-item v-if="canUpdate" :icon="QueueFirstInLastOut" @click="unqueueExecutions()">
+                                        <el-dropdown-item v-if="canUpdate" :icon="QueueFirstInLastOut" @click="unqueueDialogVisible = true">
                                             {{ $t("unqueue") }}
                                         </el-dropdown-item>
                                         <el-dropdown-item v-if="canUpdate" :icon="RunFast" @click="forceRunExecutions()">
@@ -125,12 +128,13 @@
                                     </el-dropdown-menu>
                                 </template>
                             </el-dropdown>
-                        </bulk-select>
+                        </BulkSelect>
                         <el-dialog
                             v-if="isOpenLabelsModal"
                             v-model="isOpenLabelsModal"
-                            destroy-on-close
-                            :append-to-body="true"
+                            destroyOnClose
+                            :appendToBody="true"
+                            alignCenter
                         >
                             <template #header>
                                 <h5>{{ $t("Set labels") }}</h5>
@@ -145,13 +149,10 @@
                                 </el-button>
                             </template>
 
-                            <el-form>
-                                <el-form-item :label="$t('execution labels')">
-                                    <label-input
-                                        :key="executionLabels"
-                                        v-model:labels="executionLabels"
-                                    />
-                                </el-form-item>
+                            <el-form labelPosition="top">
+                                <ElFormItem :label="$t('execution labels')">
+                                    <LabelInput v-model:labels="executionLabels" />
+                                </ElFormItem>
                             </el-form>
                         </el-dialog>
                     </template>
@@ -159,169 +160,133 @@
                         <el-table-column
                             prop="id"
                             sortable="custom"
-                            :sort-orders="['ascending', 'descending']"
+                            :sortOrders="['ascending', 'descending']"
                             :label="$t('id')"
                         >
                             <template #default="scope">
-                                <id
-                                    :value="scope.row.id"
-                                    :shrink="true"
-                                    @click="onRowDoubleClick(executionParams(scope.row))"
-                                />
-                            </template>
-                        </el-table-column>
-
-                        <el-table-column
-                            prop="state.startDate"
-                            v-if="displayColumn('state.startDate')"
-                            sortable="custom"
-                            :sort-orders="['ascending', 'descending']"
-                            :label="$t('start date')"
-                        >
-                            <template #default="scope">
-                                <date-ago :inverted="true" :date="scope.row.state.startDate" />
-                            </template>
-                        </el-table-column>
-
-                        <el-table-column
-                            prop="state.endDate"
-                            v-if="displayColumn('state.endDate')"
-                            sortable="custom"
-                            :sort-orders="['ascending', 'descending']"
-                            :label="$t('end date')"
-                        >
-                            <template #default="scope">
-                                <date-ago :inverted="true" :date="scope.row.state.endDate" />
-                            </template>
-                        </el-table-column>
-
-                        <el-table-column
-                            prop="state.duration"
-                            v-if="displayColumn('state.duration')"
-                            sortable="custom"
-                            :sort-orders="['ascending', 'descending']"
-                            :label="$t('duration')"
-                        >
-                            <template #default="scope">
-                                <span v-if="isRunning(scope.row)">{{
-                                    $filters.humanizeDuration(durationFrom(scope.row))
-                                }}</span>
-                                <span v-else>{{ $filters.humanizeDuration(scope.row.state.duration) }}</span>
-                            </template>
-                        </el-table-column>
-
-                        <el-table-column
-                            v-if="$route.name !== 'flows/update' && displayColumn('namespace')"
-                            prop="namespace"
-                            sortable="custom"
-                            :sort-orders="['ascending', 'descending']"
-                            :label="$t('namespace')"
-                            :formatter="(_, __, cellValue) => $filters.invisibleSpace(cellValue)"
-                        />
-
-                        <el-table-column
-                            v-if="$route.name !== 'flows/update' && displayColumn('flowId')"
-                            prop="flowId"
-                            sortable="custom"
-                            :sort-orders="['ascending', 'descending']"
-                            :label="$t('flow')"
-                        >
-                            <template #default="scope">
-                                <router-link
-                                    :to="{name: 'flows/update', params: {namespace: scope.row.namespace, id: scope.row.flowId}}"
+                                <RouterLink
+                                    :to="{
+                                        name: 'executions/update',
+                                        params: {
+                                            namespace: scope.row?.namespace,
+                                            flowId: scope.row?.flowId,
+                                            id: scope.row?.id
+                                        }
+                                    }"
+                                    class="execution-id"
                                 >
-                                    {{ $filters.invisibleSpace(scope.row.flowId) }}
-                                </router-link>
-                            </template>
-                        </el-table-column>
-
-                        <el-table-column v-if="displayColumn('labels')" :label="$t('labels')">
-                            <template #default="scope">
-                                <labels :labels="filteredLabels(scope.row.labels)" />
+                                    <Id :value="scope.row?.id" :shrink="true" />
+                                </RouterLink>
                             </template>
                         </el-table-column>
 
                         <el-table-column
-                            prop="state.current"
-                            v-if="displayColumn('state.current')"
-                            sortable="custom"
-                            :sort-orders="['ascending', 'descending']"
-                            :label="$t('state')"
+                            v-for="col in visibleColumns"
+                            :key="col.prop"
+                            :prop="col.prop"
+                            :label="col.label"
+                            :class="col.prop === 'flowRevision' ? 'shrink' : ''"
+                            :align="col.prop === 'inputs' || col.prop === 'outputs' ? 'center' : undefined"
+                            :formatter="col.prop === 'namespace' ? ((_ : any, __: any, cellValue: string) => invisibleSpace(cellValue)) : undefined"
+                            :sortable="isColumnSortable(col.prop) ? 'custom' : false"
+                            :sortOrders="isColumnSortable(col.prop) ? ['ascending', 'descending'] : []"
                         >
                             <template #default="scope">
-                                <status :status="scope.row.state.current" size="small" />
+                                <template v-if="col.prop === 'state.startDate'">
+                                    <DateAgo :inverted="true" :date="scope.row?.state?.startDate" />
+                                </template>
+                                <template v-else-if="col.prop === 'state.endDate'">
+                                    <DateAgo :inverted="true" :date="scope.row?.state?.endDate" />
+                                </template>
+                                <template v-else-if="col.prop === 'state.duration'">
+                                    <Duration :field="scope.row?.state?.duration" :startDate="scope.row?.state?.startDate" />
+                                </template>
+                                <template v-else-if="col.prop === 'namespace' && $route.name !== 'flows/update'">
+                                    <span :title="invisibleSpace(scope.row?.namespace)">{{ invisibleSpace(scope.row?.namespace) }}</span>
+                                </template>
+                                <template v-else-if="col.prop === 'flowId' && $route.name !== 'flows/update'">
+                                    <router-link
+                                        :to="{
+                                            name: 'flows/update',
+                                            params: {
+                                                namespace: scope.row?.namespace,
+                                                id: scope.row?.flowId
+                                            }
+                                        }"
+                                    >
+                                        {{ invisibleSpace(scope.row?.flowId) }}
+                                    </router-link>
+                                </template>
+                                <template v-else-if="col.prop === 'labels'">
+                                    <Labels :labels="filteredLabels(scope.row?.labels)" @click.prevent.stop />
+                                </template>
+                                <template v-else-if="col.prop === 'state.current'">
+                                    <Status :status="scope.row?.state?.current" size="small" />
+                                </template>
+                                <template v-else-if="col.prop === 'flowRevision'">
+                                    <code class="code-text">{{ scope.row?.flowRevision }}</code>
+                                </template>
+                                <template v-else-if="col.prop === 'inputs'">
+                                    <el-tooltip effect="light">
+                                        <template #content>
+                                            <pre class="mb-0">{{ JSON.stringify(scope.row?.inputs, null, "\t") }}</pre>
+                                        </template>
+                                        <div>
+                                            <Import v-if="scope.row?.inputs" class="fs-5" />
+                                        </div>
+                                    </el-tooltip>
+                                </template>
+                                <template v-else-if="col.prop === 'outputs'">
+                                    <el-tooltip effect="light">
+                                        <template #content>
+                                            <pre class="mb-0">{{ JSON.stringify(scope.row?.outputs, null, "\t") }}</pre>
+                                        </template>
+                                        <div>
+                                            <Export v-if="scope.row?.outputs" class="fs-5" />
+                                        </div>
+                                    </el-tooltip>
+                                </template>
+                                <template v-else-if="col.prop === 'taskRunList.taskId'">
+                                    <code class="code-text">
+                                        {{ scope.row?.taskRunList?.slice(-1)[0]?.taskId }}
+                                        {{
+                                            scope.row?.taskRunList?.slice(-1)[0]?.attempts?.length > 1 ? `(${scope.row?.taskRunList?.slice(-1)[0]?.attempts?.length})` : ""
+                                        }}
+                                    </code>
+                                </template>
+                                <template v-else-if="col.prop === 'trigger'">
+                                    <TriggerAvatar :execution="scope.row" />
+                                </template>
+                                <template v-else-if="col.prop === 'trigger.variables.executionId'">
+                                    <RouterLink
+                                        v-if="scope.row?.trigger?.type === 'io.kestra.plugin.core.flow.Subflow' && scope.row?.trigger?.variables?.executionId"
+                                        :to="{
+                                            name: 'executions/update',
+                                            params: {
+                                                namespace: scope.row?.namespace,
+                                                flowId: scope.row?.flowId,
+                                                id: scope.row?.trigger?.variables?.executionId
+                                            }
+                                        }"
+                                    >
+                                        <Id :value="scope.row?.trigger?.variables?.executionId" :shrink="true" />
+                                    </RouterLink>
+                                    <span v-else>-</span>
+                                </template>
                             </template>
-                        </el-table-column>
-
-                        <el-table-column
-                            prop="flowRevision"
-                            v-if="displayColumn('revision')"
-                            :label="$t('revision')"
-                            class-name="shrink"
-                        >
-                            <template #default="scope">
-                                <code>{{ scope.row.flowRevision }}</code>
-                            </template>
-                        </el-table-column>
-
-                        <el-table-column
-                            prop="inputs"
-                            v-if="displayColumn('inputs')"
-                            :label="$t('inputs')"
-                            align="center"
-                        >
-                            <template #default="scope">
-                                <el-tooltip effect="light">
-                                    <template #content>
-                                        <pre class="mb-0">{{ JSON.stringify(scope.row.inputs, null, "\t") }}</pre>
-                                    </template>
-                                    <Import v-if="scope.row.inputs" class="fs-5" />
-                                </el-tooltip>
-                            </template>
-                        </el-table-column>
-
-                        <el-table-column
-                            prop="taskRunList.taskId"
-                            v-if="displayColumn('taskRunList.taskId')"
-                            :label="$t('task id')"
-                        >
-                            <template #header="scope">
+                            <template v-if="col.prop === 'taskRunList.taskId'" #header="scope">
                                 <el-tooltip :content="$t('taskid column details')" effect="light">
                                     {{ scope.column.label }}
                                 </el-tooltip>
                             </template>
-                            <template #default="scope">
-                                <code>
-                                    {{ scope.row.taskRunList?.slice(-1)[0].taskId }}
-                                    {{
-                                        scope.row.taskRunList?.slice(-1)[0].attempts?.length > 1 ? `(${scope.row.taskRunList?.slice(-1)[0].attempts.length})` : ""
-                                    }}
-                                </code>
-                            </template>
-                        </el-table-column>
-
-                        <el-table-column 
-                            column-key="action" 
-                            class-name="row-action"
-                            :label="$t('actions')"
-                        >
-                            <template #default="scope">
-                                <router-link
-                                    :to="{name: 'executions/update', params: {namespace: scope.row.namespace, flowId: scope.row.flowId, id: scope.row.id}, query: {revision: scope.row.flowRevision}}"
-                                >
-                                    <kicon :tooltip="$t('details')" placement="left">
-                                        <TextSearch />
-                                    </kicon>
-                                </router-link>
-                            </template>
                         </el-table-column>
                     </template>
-                </select-table>
+                </SelectTable>
             </template>
-        </data-table>
+        </DataTable>
     </section>
 
-    <el-dialog v-if="changeStatusDialogVisible" v-model="changeStatusDialogVisible" :id="uuid" destroy-on-close :append-to-body="true">
+    <el-dialog v-if="changeStatusDialogVisible" v-model="changeStatusDialogVisible" :id="Utils.uid()" destroyOnClose :appendToBody="true" alignCenter>
         <template #header>
             <h5>{{ $t("confirmation") }}</h5>
         </template>
@@ -340,7 +305,7 @@
                     :value="item.code"
                 >
                     <template #default>
-                        <status size="small" :label="false" class="me-1" :status="item.code" />
+                        <Status size="small" :label="false" class="me-1" :status="item.code" />
                         <span v-html="item.label" />
                     </template>
                 </el-option>
@@ -359,636 +324,767 @@
             </el-button>
         </template>
     </el-dialog>
+
+    <el-dialog v-if="unqueueDialogVisible" v-model="unqueueDialogVisible" destroyOnClose :appendToBody="true">
+        <template #header>
+            <h5>{{ $t("confirmation") }}</h5>
+        </template>
+
+        <template #default>
+            <p v-html="$t('unqueue title multiple', {count: queryBulkAction ? executionsStore.total : selection.length})" />
+
+            <el-select
+                :required="true"
+                v-model="selectedStatus"
+                :persistent="false"
+            >
+                <el-option
+                    v-for="item in unQueuestates"
+                    :key="item.code"
+                    :value="item.code"
+                >
+                    <template #default>
+                        <Status size="small" :label="false" class="me-1" :status="item.code" />
+                        <span v-html="item.label" />
+                    </template>
+                </el-option>
+            </el-select>
+        </template>
+
+        <template #footer>
+            <el-button @click="unqueueDialogVisible = false">
+                {{ $t('cancel') }}
+            </el-button>
+            <el-button
+                type="primary"
+                @click="unqueueExecutions()"
+            >
+                {{ $t('ok') }}
+            </el-button>
+        </template>
+    </el-dialog>
+
+    <el-dialog v-if="isOpenReplayModal" v-model="isOpenReplayModal" :id="Utils.uid()" destroyOnClose :appendToBody="true" alignCenter>
+        <template #header>
+            <h5>{{ $t("confirmation") }}</h5>
+        </template>
+
+        <template #default>
+            <p v-html="changeReplayToast()" />
+        </template>
+
+        <template #footer>
+            <el-button @click="isOpenReplayModal = false">
+                {{ $t('cancel') }}
+            </el-button>
+            <el-button @click="replayExecutions(true)">
+                {{ $t('replay latest revision') }}
+            </el-button>
+            <el-button
+                type="primary"
+                @click="replayExecutions(false)"
+            >
+                {{ $t('ok') }}
+            </el-button>
+        </template>
+    </el-dialog>
 </template>
 
-<script setup>
-    import BulkSelect from "../layout/BulkSelect.vue";
-    import SelectTable from "../layout/SelectTable.vue";
-    import PlayBox from "vue-material-design-icons/PlayBox.vue";
-    import PlayBoxMultiple from "vue-material-design-icons/PlayBoxMultiple.vue";
-    import DotsVertical from "vue-material-design-icons/DotsVertical.vue";
-    import Restart from "vue-material-design-icons/Restart.vue";
+<script setup lang="ts">
+    import _merge from "lodash/merge";
+    import {useI18n} from "vue-i18n";
+    import {useRoute, useRouter} from "vue-router";
+    import {ref, computed, watch, h, useTemplateRef} from "vue";
+    import * as YAML_UTILS from "@kestra-io/ui-libs/flow-yaml-utils";
+    import {ElMessageBox, ElSwitch, ElFormItem, ElAlert, ElCheckbox} from "element-plus";
+
     import Delete from "vue-material-design-icons/Delete.vue";
-    import StopCircleOutline from "vue-material-design-icons/StopCircleOutline.vue";
     import Pencil from "vue-material-design-icons/Pencil.vue";
     import Import from "vue-material-design-icons/Import.vue";
-    import LabelMultiple from "vue-material-design-icons/LabelMultiple.vue";
-    import StateMachine from "vue-material-design-icons/StateMachine.vue";
-    import PauseBox from "vue-material-design-icons/PauseBox.vue";
-    import KestraFilter from "../filter/KestraFilter.vue"
-    import QueueFirstInLastOut from "vue-material-design-icons/QueueFirstInLastOut.vue";
+    import Export from "vue-material-design-icons/Export.vue";
+    import Restart from "vue-material-design-icons/Restart.vue";
     import RunFast from "vue-material-design-icons/RunFast.vue";
-</script>
+    import PlayBox from "vue-material-design-icons/PlayBox.vue";
+    import PauseBox from "vue-material-design-icons/PauseBox.vue";
+    import DotsVertical from "vue-material-design-icons/DotsVertical.vue";
+    import StateMachine from "vue-material-design-icons/StateMachine.vue";
+    import LabelMultiple from "vue-material-design-icons/LabelMultiple.vue";
+    import PlayBoxMultiple from "vue-material-design-icons/PlayBoxMultiple.vue";
+    import StopCircleOutline from "vue-material-design-icons/StopCircleOutline.vue";
+    import QueueFirstInLastOut from "vue-material-design-icons/QueueFirstInLastOut.vue";
+    import Download from "vue-material-design-icons/Download.vue";
 
-<script>
-    import {mapState, mapGetters} from "vuex";
-    import DataTable from "../layout/DataTable.vue";
-    import TextSearch from "vue-material-design-icons/TextSearch.vue";
-    import Status from "../Status.vue";
-    import RouteContext from "../../mixins/routeContext";
-    import TopNavBar from "../../components/layout/TopNavBar.vue";
-    import DataTableActions from "../../mixins/dataTableActions";
-    import SelectTableActions from "../../mixins/selectTableActions";
-    import Kicon from "../Kicon.vue"
-    import Labels from "../layout/Labels.vue"
-    import RestoreUrl from "../../mixins/restoreUrl";
-    import {State} from "@kestra-io/ui-libs"
     import Id from "../Id.vue";
-    import _merge from "lodash/merge";
-    import permission from "../../models/permission";
-    import action from "../../models/action";
-    import TriggerFlow from "../../components/flows/TriggerFlow.vue";
-    import {storageKeys} from "../../utils/constants";
-    import LabelInput from "../../components/labels/LabelInput.vue";
-    import {ElMessageBox, ElSwitch, ElFormItem, ElAlert, ElCheckbox} from "element-plus";
-    import {h, ref} from "vue";
-    import ExecutionsBar from "../../components/dashboard/components/charts/executions/Bar.vue"
+    import {State, Status} from "@kestra-io/ui-libs";
+    import Labels from "../layout/Labels.vue";
     import DateAgo from "../layout/DateAgo.vue";
+    import DataTable from "../layout/DataTable.vue";
+    import BulkSelect from "../layout/BulkSelect.vue";
+    import SelectTable from "../layout/SelectTable.vue";
+    import KSFilter from "../filter/components/KSFilter.vue";
+    import Sections from "../dashboard/sections/Sections.vue";
+    import TopNavBar from "../../components/layout/TopNavBar.vue";
+    import LabelInput from "../../components/labels/LabelInput.vue";
+    //@ts-expect-error no declaration file
+    import TriggerFlow from "../../components/flows/TriggerFlow.vue";
+    import TriggerAvatar from "../../components/flows/TriggerAvatar.vue";
 
-    import {filterLabels} from "./utils"
+    import {filterValidLabels} from "./utils";
+    import {useToast} from "../../utils/toast";
+    import {storageKeys} from "../../utils/constants";
+    import {invisibleSpace} from "../../utils/filters";
+    import Utils from "../../utils/utils";
+    import Duration from "../../components/dashboard/sections/table/columns/Duration.vue";
 
-    export default {
-        mixins: [RouteContext, RestoreUrl, DataTableActions, SelectTableActions],
-        components: {
-            Status,
-            TextSearch,
-            DataTable,
-            Kicon,
-            Labels,
-            Id,
-            TriggerFlow,
-            TopNavBar,
-            LabelInput,
-            ExecutionsBar,
-            DateAgo
+    import action from "../../models/action";
+    import permission from "../../models/permission";
+
+    import useRouteContext from "../../composables/useRouteContext";
+    import {useTableColumns} from "../../composables/useTableColumns";
+    import {useDataTableActions} from "../../composables/useDataTableActions";
+    import {useSelectTableActions} from "../../composables/useSelectTableActions";
+
+    import {useFlowStore} from "../../stores/flow";
+    import {useAuthStore} from "override/stores/auth";
+    import {useMiscStore} from "override/stores/misc";
+    import {Label, useExecutionsStore} from "../../stores/executions";
+
+    import {useExecutionFilter, useFlowExecutionFilter} from "../filter/configurations";
+    import YAML_CHART from "../dashboard/assets/executions_timeseries_chart.yaml?raw";
+
+    const {t} = useI18n();
+    const toast = useToast();
+
+    const executionFilter = useExecutionFilter();
+    const flowExecutionFilter = useFlowExecutionFilter();
+
+    const props = withDefaults(defineProps<{
+        embed?: boolean;
+        filter?: boolean;
+        topbar?: boolean;
+        id?: string | null;
+        statuses?: string[];
+        isReadOnly?: boolean;
+        isConcurrency?: boolean;
+        visibleCharts?: boolean;
+        hidden?: string[] | null;
+        flowId?: string | undefined;
+        namespace?: string | undefined;
+        defaultScopeFilter?: boolean;
+    }>(), {
+        embed: false,
+        filter: true,
+        topbar: true,
+        id: null,
+        statuses: () => [],
+        isReadOnly: false,
+        isConcurrency: false,
+        visibleCharts: false,
+        hidden: null,
+        flowId: undefined,
+        namespace: undefined,
+        defaultScopeFilter: false
+    });
+
+    const emit = defineEmits<{
+        "state-count": [payload: { runningCount: number; totalCount: number }];
+    }>();
+
+    const route = useRoute();
+    const router = useRouter();
+
+    const authStore = useAuthStore();
+    const flowStore = useFlowStore();
+    const miscStore = useMiscStore();
+    const executionsStore = useExecutionsStore();
+
+    const executionLabels = ref<Label[]>([]);
+    const recomputeInterval = ref(false);
+    const isOpenLabelsModal = ref(false);
+    const isOpenReplayModal = ref(false);
+    const selectedStatus = ref(undefined);
+    const lastRefreshDate = ref(new Date());
+    const unqueueDialogVisible = ref(false);
+    const changeStatusDialogVisible = ref(false);
+    const actionOptions = ref<Record<string, any>>({});
+    const dblClickRouteName = ref("executions/update");
+    const showChart = ref(localStorage.getItem(storageKeys.SHOW_CHART) !== "false");
+
+    const optionalColumns = ref([
+        {
+            label: t("start date"),
+            prop: "state.startDate",
+            default: true,
+            description: t("filter.table_column.executions.start-date")
         },
-        emits: ["state-count"],
-        props: {
-            hidden: {
-                type: Array,
-                default: null
-            },
-            statuses: {
-                type: Array,
-                default: () => []
-            },
-            isReadOnly: {
-                type: Boolean,
-                default: false
-            },
-            embed: {
-                type: Boolean,
-                default: false
-            },
-            topbar: {
-                type: Boolean,
-                default: true
-            },
-            filter: {
-                type: Boolean,
-                default: true
-            },
-            namespace: {
-                type: String,
-                required: false,
-                default: undefined
-            },
-            flowId: {
-                type: String,
-                required: false,
-                default: undefined
-            },
-            isConcurrency: {
-                type: Boolean,
-                default: false
-            }
+        {
+            label: t("end date"),
+            prop: "state.endDate",
+            default: true,
+            description: t("filter.table_column.executions.end-date")
         },
-        data() {
-            return {
-                isDefaultNamespaceAllow: true,
-                dailyReady: false,
-                dblClickRouteName: "executions/update",
-                flowTriggerDetails: undefined,
-                recomputeInterval: false,
-                showChart: ["true", null].includes(localStorage.getItem(storageKeys.SHOW_CHART)),
-                optionalColumns: [
-                    {
-                        label: this.$t("start date"),
-                        prop: "state.startDate",
-                        default: true
-                    },
-                    {
-                        label: this.$t("end date"),
-                        prop: "state.endDate",
-                        default: true
-                    },
-                    {
-                        label: this.$t("duration"),
-                        prop: "state.duration",
-                        default: true
-                    },
-                    {
-                        label: this.$t("namespace"),
-                        prop: "namespace",
-                        default: true
-                    },
-                    {
-                        label: this.$t("flow"),
-                        prop: "flowId",
-                        default: true
-                    },
-                    {
-                        label: this.$t("labels"),
-                        prop: "labels",
-                        default: true
-                    },
-                    {
-                        label: this.$t("state"),
-                        prop: "state.current",
-                        default: true
-                    },
-                    {
-                        label: this.$t("revision"),
-                        prop: "flowRevision",
-                        default: false
-                    },
-                    {
-                        label: this.$t("inputs"),
-                        prop: "inputs",
-                        default: false
-                    },
-                    {
-                        label: this.$t("task id"),
-                        prop: "taskRunList.taskId",
-                        default: false
-                    }
-                ],
-                displayColumns: [],
-                childFilter: "ALL",
-                storageKey: storageKeys.DISPLAY_EXECUTIONS_COLUMNS,
-                isOpenLabelsModal: false,
-                executionLabels: [],
-                actionOptions: {},
-                lastRefreshDate: new Date(),
-                changeStatusDialogVisible: false,
-                selectedStatus: undefined
-            };
+        {
+            label: t("duration"),
+            prop: "state.duration",
+            default: true,
+            description: t("filter.table_column.executions.duration")
         },
-        created() {
-            // allow to have different storage key for flow executions list
-            if (this.$route.name === "flows/update") {
-                this.storageKey = storageKeys.DISPLAY_FLOW_EXECUTIONS_COLUMNS;
-                this.optionalColumns = this.optionalColumns.filter(col => col.prop !== "namespace" && col.prop !== "flowId")
-            }
-            this.displayColumns = localStorage.getItem("columns_executions")?.split(",")
-                || this.optionalColumns.filter(col => col.default).map(col => col.prop);
-            if (this.isConcurrency) {
-                this.emitStateCount([State.RUNNING, State.PAUSED])
-            }
+        {
+            label: t("namespace"),
+            prop: "namespace",
+            default: true,
+            description: t("filter.table_column.executions.namespace")
         },
-        computed: {
-            ...mapState("execution", ["executions", "total"]),
-            ...mapState("stat", ["daily"]),
-            ...mapState("auth", ["user"]),
-            ...mapState("flow", ["flow"]),
-            ...mapGetters("misc", ["configs"]),
-            routeInfo() {
-                return {
-                    title: this.$t("executions")
-                };
-            },
-            endDate() {
-                if (this.$route.query.endDate) {
-                    return this.$route.query.endDate;
-                }
-                return undefined;
-            },
-            startDate() {
-                if (this.$route.query.startDate && this.lastRefreshDate) {
-                    return this.$route.query.startDate;
-                }
-                if (this.$route.query.timeRange) {
-                    return this.$moment().subtract(this.$moment.duration(this.$route.query.timeRange).as("milliseconds")).toISOString(true);
-                }
-
-                // the default is PT30D
-                return this.$moment().subtract(30, "days").toISOString(true);
-            },
-            displayButtons() {
-                return (this.$route.name === "flows/update") || (this.$route.name === "executions/list");
-            },
-            canCheck() {
-                return this.canDelete || this.canUpdate;
-            },
-            canCreate() {
-                return this.user && this.user.isAllowed(permission.EXECUTION, action.CREATE, this.namespace);
-            },
-            canUpdate() {
-                return this.user && this.user.isAllowed(permission.EXECUTION, action.UPDATE, this.namespace);
-            },
-            canDelete() {
-                return this.user && this.user.isAllowed(permission.EXECUTION, action.DELETE, this.namespace);
-            },
-            isAllowedEdit() {
-                return this.user.isAllowed(permission.FLOW, action.UPDATE, this.flow.namespace);
-            },
-            hasAnyExecute() {
-                return this.user.hasAnyActionOnAnyNamespace(permission.EXECUTION, action.CREATE);
-            },
-            isDisplayedTop() {
-                return this.embed === false && this.filter
-            },
-            states() {
-                return [ State.FAILED, State.SUCCESS, State.WARNING, State.CANCELLED,].map(value => {
-                    return {
-                        code: value,
-                        label: this.$t("mark as", {status: value})
-                    };
-                });
-            },
-            executionsCount() {
-                return [...this.daily].reduce((a, b) => {
-                    return a + Object.values(b.executionCounts).reduce((a, b) => a + b, 0);
-                }, 0);
-            },
-            selectedNamespace(){
-                return this.namespace !== null && this.namespace !== undefined ? this.namespace : this.$route.query?.namespace;
-            }
+        {
+            label: t("flow"),
+            prop: "flowId",
+            default: true,
+            description: t("filter.table_column.executions.flow")
         },
-        beforeRouteEnter(to, from, next) {
-            const defaultNamespace = localStorage.getItem(storageKeys.DEFAULT_NAMESPACE);
-            const query = {...to.query};
-            if (defaultNamespace) {
-                query.namespace = defaultNamespace;
-            } if (!query.scope) {
-                query.scope = defaultNamespace === "system" ? ["SYSTEM"] : ["USER"];
-            }
-            next(vm => {
-                vm.$router?.replace({query});
-            });
+        {
+            label: t("labels"),
+            prop: "labels",
+            default: true,
+            description: t("filter.table_column.executions.labels")
         },
-        methods: {
-            filteredLabels(labels) {
-                const toIgnore = this.configs.hiddenLabelsPrefixes || [];
-
-                // Extract only the keys from the route query labels
-                const allowedLabels = this.$route.query.labels ? this.$route.query.labels.map(label => label.split(":")[0]) : [];
-
-                return labels?.filter(label => {
-                    // Check if the label key matches any prefix but allow it if it's in the query
-                    return !toIgnore.some(prefix => label.key.startsWith(prefix)) || allowedLabels.includes(label.key);
-                });
-            },
-            executionParams(row) {
-                return {
-                    namespace: row.namespace,
-                    flowId: row.flowId,
-                    id: row.id
-                }
-            },
-            onDisplayColumnsChange(event) {
-                localStorage.setItem(this.storageKey, event);
-                this.displayColumns = event;
-            },
-            displayColumn(column) {
-                return this.hidden ? !this.hidden.includes(column) : this.displayColumns.includes(column);
-            },
-            updateDisplayColumns(newColumns) {
-                this.displayColumns = newColumns;
-            },
-            onShowChartChange(value) {
-                this.showChart = value;
-                localStorage.setItem(storageKeys.SHOW_CHART, value);
-
-                if (this.showChart) {
-                    this.loadStats();
-                }
-            },
-            showStatChart() {
-                return this.isDisplayedTop && this.showChart;
-            },
-            refresh() {
-                this.recomputeInterval = !this.recomputeInterval;
-                this.load();
-            },
-            selectionMapper(execution) {
-                return execution.id
-            },
-            isRunning(item) {
-                return State.isRunning(item.state.current);
-            },
-            onStatusChange() {
-                this.load(this.onDataLoaded);
-            },
-            loadQuery(base, stats) {
-                let queryFilter = this.queryWithFilter();
-
-                if (stats) {
-                    delete queryFilter["timeRange"];
-                    delete queryFilter["startDate"];
-                    delete queryFilter["endDate"];
-                } else if (queryFilter.timeRange) {
-                    delete queryFilter["startDate"];
-                    delete queryFilter["endDate"];
-                }
-
-                if (this.namespace) {
-                    queryFilter["namespace"] = this.namespace;
-                }
-
-                if (this.flowId) {
-                    queryFilter["flowId"] = this.flowId;
-                }
-
-                return _merge(base, queryFilter)
-            },
-            loadStats() {
-                this.dailyReady = false;
-
-                this.$store
-                    .dispatch("stat/daily", this.loadQuery({
-                        startDate: this.$moment(this.startDate).toISOString(true),
-                        endDate: this.$moment(this.endDate).toISOString(true)
-                    }, true))
-                    .then(() => {
-                        this.dailyReady = true;
-                    });
-            },
-            loadData(callback) {
-                this.lastRefreshDate = new Date();
-                if (this.showStatChart()) {
-                    this.loadStats();
-                }
-
-                this.$store.dispatch("execution/findExecutions", this.loadQuery({
-                    size: parseInt(this.$route.query.size || this.internalPageSize),
-                    page: parseInt(this.$route.query.page || this.internalPageNumber),
-                    sort: this.$route.query.sort || "state.startDate:desc",
-                    state: this.$route.query.state ? [this.$route.query.state] : this.statuses
-                }, false)).finally(callback);
-            },
-            durationFrom(item) {
-                return (+new Date() - new Date(item.state.startDate).getTime()) / 1000
-            },
-            genericConfirmAction(toast, queryAction, byIdAction, success) {
-                this.$toast().confirm(
-                    this.$t(toast, {"executionCount": this.queryBulkAction ? this.total : this.selection.length}),
-                    () => this.genericConfirmCallback(queryAction, byIdAction, success),
-                    () => {}
-                );
-            },
-            genericConfirmCallback(queryAction, byIdAction, success) {
-                if (this.queryBulkAction) {
-                    const query = this.loadQuery({
-                        sort: this.$route.query.sort || "state.startDate:desc",
-                        state: this.$route.query.state ? [this.$route.query.state] : this.statuses,
-                    }, false);
-                    const options = {...query, ...this.actionOptions};
-                    return this.$store
-                        .dispatch(queryAction, options)
-                        .then(r => {
-                            this.$toast().success(this.$t(success, {executionCount: r.data.count}));
-                            this.loadData();
-                        })
-                } else {
-                    const selection = {executionsId: this.selection};
-                    const options = {...selection, ...this.actionOptions};
-                    return this.$store
-                        .dispatch(byIdAction, options)
-                        .then(r => {
-                            this.$toast().success(this.$t(success, {executionCount: r.data.count}));
-                            this.loadData();
-                        }).catch(e => {
-                            this.$toast().error(e?.invalids.map(exec => {
-                                return {message: this.$t(exec.message, {executionId: exec.invalidValue})}
-                            }), this.$t(e.message))
-                        })
-                }
-            },
-            resumeExecutions() {
-                this.genericConfirmAction(
-                    "bulk resume",
-                    "execution/queryResumeExecution",
-                    "execution/bulkResumeExecution",
-                    "executions resumed"
-                );
-            },
-            pauseExecutions() {
-                this.genericConfirmAction(
-                    "bulk pause",
-                    "execution/queryPauseExecution",
-                    "execution/bulkPauseExecution",
-                    "executions paused"
-                );
-            },
-            unqueueExecutions() {
-                this.genericConfirmAction(
-                    "bulk unqueue",
-                    "execution/queryUnqueueExecution",
-                    "execution/bulkUnqueueExecution",
-                    "executions unqueue"
-                );
-            },
-            forceRunExecutions() {
-                this.genericConfirmAction(
-                    "bulk force run",
-                    "execution/queryForceRunExecution",
-                    "execution/bulkForceRunExecution",
-                    "executions force run"
-                );
-            },
-            restartExecutions() {
-                this.genericConfirmAction(
-                    "bulk restart",
-                    "execution/queryRestartExecution",
-                    "execution/bulkRestartExecution",
-                    "executions restarted"
-                );
-            },
-            replayExecutions() {
-                this.genericConfirmAction(
-                    "bulk replay",
-                    "execution/queryReplayExecution",
-                    "execution/bulkReplayExecution",
-                    "executions replayed"
-                );
-            },
-            changeStatus() {
-                this.changeStatusDialogVisible = false;
-                this.actionOptions.newStatus = this.selectedStatus;
-
-                this.genericConfirmCallback(
-                    "execution/queryChangeExecutionStatus",
-                    "execution/bulkChangeExecutionStatus",
-                    "executions state changed"
-                );
-            },
-            changeStatusToast() {
-                return this.$t("bulk change state", {"executionCount": this.queryBulkAction ? this.total : this.selection.length});
-            },
-            deleteExecutions() {
-                const includeNonTerminated = ref(false);
-
-                const deleteLogs = ref(true);
-                const deleteMetrics = ref(true);
-                const deleteStorage = ref(true);
-
-                const message = () => h("div", null, [
-                    h(
-                        "p",
-                        {innerHTML: this.$t("bulk delete", {"executionCount": this.queryBulkAction ? this.total : this.selection.length})}
-                    ),
-                    h(ElFormItem, {
-                        class: "mt-3",
-                        label: this.$t("execution-include-non-terminated")
-                    }, [
-                        h(ElSwitch, {
-                            modelValue: includeNonTerminated.value,
-                            "onUpdate:modelValue": (val) => {
-                                includeNonTerminated.value = val;
-                            },
-                        }),
-                    ]),
-                    includeNonTerminated.value ? h(ElAlert, {
-                        title: this.$t("execution-warn-title"),
-                        description: this.$t("execution-warn-deleting-still-running"),
-                        type: "warning",
-                        showIcon: true,
-                        closable: false,
-                        class: "custom-warning"
-                    }) : null,
-                    h(ElCheckbox, {
-                        modelValue: deleteLogs.value,
-                        label: this.$t("execution_deletion.logs"),
-                        "onUpdate:modelValue": (val) => (deleteLogs.value = val),
-                    }),
-                    h(ElCheckbox, {
-                        modelValue: deleteMetrics.value,
-                        label: this.$t("execution_deletion.metrics"),
-                        "onUpdate:modelValue": (val) => (deleteMetrics.value = val),
-                    }),
-                    h(ElCheckbox, {
-                        modelValue: deleteStorage.value,
-                        label: this.$t("execution_deletion.storage"),
-                        "onUpdate:modelValue": (val) => (deleteStorage.value = val),
-                    }),
-                ]);
-                ElMessageBox.confirm(message, this.$t("confirmation"), {
-                    type: "confirm",
-                    inputType: "checkbox",
-                    inputValue: "false",
-                }).then(() => {
-                    this.actionOptions.includeNonTerminated = includeNonTerminated.value;
-                    this.actionOptions.deleteLogs = deleteLogs.value;
-                    this.actionOptions.deleteMetrics = deleteMetrics.value;
-                    this.actionOptions.deleteStorage = deleteStorage.value;
-
-                    this.genericConfirmCallback(
-                        "execution/queryDeleteExecution",
-                        "execution/bulkDeleteExecution",
-                        "executions deleted"
-                    );
-                });
-            },
-            killExecutions() {
-                this.genericConfirmAction(
-                    "bulk kill",
-                    "execution/queryKill",
-                    "execution/bulkKill",
-                    "executions killed"
-                );
-            },
-            setLabels() {
-                const filtered = filterLabels(this.executionLabels)
-
-                if(filtered.error) {
-                    this.$toast().error(this.$t("wrong labels"))
-                    return;
-                }
-
-                this.$toast().confirm(
-                    this.$t("bulk set labels", {"executionCount": this.queryBulkAction ? this.total : this.selection.length}),
-                    () => {
-                        if (this.queryBulkAction) {
-                            return this.$store
-                                .dispatch("execution/querySetLabels", {
-                                    params: this.loadQuery({
-                                        sort: this.$route.query.sort || "state.startDate:desc",
-                                        state: this.$route.query.state ? [this.$route.query.state] : this.statuses
-                                    }, false),
-                                    data: filtered.labels
-                                })
-                                .then(r => {
-                                    this.$toast().success(this.$t("Set labels done", {executionCount: r.data.count}));
-                                    this.loadData();
-                                })
-                        } else {
-                            return this.$store
-                                .dispatch("execution/bulkSetLabels", {
-                                    executionsId: this.selection,
-                                    executionLabels: filtered.labels
-                                })
-                                .then(r => {
-                                    this.$toast().success(this.$t("Set labels done", {executionCount: r.data.count}));
-                                    this.loadData();
-                                }).catch(e => this.$toast().error(e.invalids.map(exec => {
-                                    return {message: this.$t(exec.message, {executionId: exec.invalidValue})}
-                                }), this.$t(e.message)))
-                        }
-                    },
-                    () => {
-                    }
-                )
-                this.isOpenLabelsModal = false;
-            },
-            editFlow() {
-                this.$router.push({
-                    name: "flows/update", params: {
-                        namespace: this.flow.namespace,
-                        id: this.flow.id,
-                        tab: "edit",
-                        tenant: this.$route.params.tenant
-                    }
-                })
-            },
-            emitStateCount(states) {
-                this.$store.dispatch("execution/findExecutions", this.loadQuery({
-                    size: parseInt(this.$route.query.size || this.internalPageSize),
-                    page: parseInt(this.$route.query.page || this.internalPageNumber),
-                    sort: this.$route.query.sort || "state.startDate:desc",
-                    state: states
-                }, false)).then(() => {
-                    this.$emit("state-count", this.total);
-                });
-            }
+        {
+            label: t("state"),
+            prop: "state.current",
+            default: true,
+            description: t("filter.table_column.executions.state")
         },
-        watch: {
-            isOpenLabelsModal(opening) {
-                if (opening) {
-                    this.executionLabels = [];
-                }
-            }
+        {
+            label: t("revision"),
+            prop: "flowRevision",
+            default: false,
+            description: t("filter.table_column.executions.revision")
         },
+        {
+            label: t("inputs"),
+            prop: "inputs",
+            default: false,
+            description: t("filter.table_column.executions.inputs")
+        },
+        {
+            label: t("outputs"),
+            prop: "outputs",
+            default: false,
+            description: t("filter.table_column.executions.outputs")
+        },
+        {
+            label: t("task id"),
+            prop: "taskRunList.taskId",
+            default: false,
+            description: t("filter.table_column.executions.task-id")
+        },
+        {
+            label: t("triggers"),
+            prop: "trigger",
+            default: true,
+            description: t("filter.table_column.executions.trigger")
+        },
+        {
+            label: t("parent execution"),
+            prop: "trigger.variables.executionId",
+            default: false,
+            description: t("filter.table_column.executions.parent-execution")
+        }
+    ]);
+
+    const storageKey = computed(() =>
+        route.name === "flows/update"
+            ? storageKeys.DISPLAY_FLOW_EXECUTIONS_COLUMNS
+            : storageKeys.DISPLAY_EXECUTIONS_COLUMNS
+    );
+
+    const {visibleColumns: displayColumns, updateVisibleColumns: updateDisplayColumns} = useTableColumns({
+        columns: optionalColumns.value,
+        storageKey: storageKey.value
+    });
+
+    const visibleColumns = computed(() =>
+        displayColumns.value
+            .map(prop => optionalColumns.value.find(c => c.prop === prop))
+            .filter(Boolean) as any[]
+    );
+
+    const isColumnSortable = (prop: string) => {
+        return !["labels", "flowRevision", "inputs", "outputs", "taskRunList.taskId", "trigger", "trigger.variables.executionId"].includes(prop);
     };
-</script>
 
+    const selectionMapper = (execution: any) => {
+        return execution.id;
+    };
+
+    const loadData = (callback?: () => void) => {
+        lastRefreshDate.value = new Date();
+
+        executionsStore.findExecutions(loadQuery({
+            size: parseInt(route.query?.size as string ?? "25"),
+            page: parseInt(route.query?.page as string ?? "1"),
+            sort: route.query?.sort as string ?? "state.startDate:desc",
+            state: route.query?.state ? [route.query?.state] : props.statuses
+        })).then(() => {
+            if (props.isConcurrency) {
+                emitStateCount();
+            }
+        }).finally(callback);
+    };
+
+    const routeInfo = computed(() => ({title: t("executions")}));
+    useRouteContext(routeInfo, props.embed);
+
+    const dataTableRef = ref(null);
+    const selectTableRef = useTemplateRef<typeof SelectTable>("selectTable");
+
+    const {
+        ready,
+        onSort,
+        onRowDoubleClick,
+        onPageChanged,
+        queryWithFilter,
+        load,
+        onDataLoaded
+    } = useDataTableActions({
+        dblClickRouteName: dblClickRouteName.value,
+        embed: props.embed,
+        dataTableRef,
+        loadData: loadData
+    });
+
+    const {
+        queryBulkAction,
+        selection,
+        handleSelectionChange,
+        toggleAllUnselected,
+        toggleAllSelection
+    } = useSelectTableActions({
+        dataTableRef: selectTableRef,
+        selectionMapper: selectionMapper
+    });
+
+    const displayButtons = computed(() => {
+        return (route.name === "flows/update") || (route.name === "executions/list");
+    });
+
+    const canCheck = computed(() => {
+        return canDelete.value || canUpdate.value;
+    });
+
+    const canCreate = computed(() => {
+        return authStore.user?.isAllowed(permission.EXECUTION, action.CREATE, props.namespace);
+    });
+
+    const canUpdate = computed(() => {
+        return authStore.user?.isAllowed(permission.EXECUTION, action.UPDATE, props.namespace);
+    });
+
+    const canDelete = computed(() => {
+        return authStore.user?.isAllowed(permission.EXECUTION, action.DELETE, props.namespace);
+    });
+
+    const isAllowedEdit = computed(() => {
+        return authStore.user?.isAllowed(permission.FLOW, action.UPDATE, flowStore.flow?.namespace);
+    });
+
+    const hasAnyExecute = computed(() => {
+        return authStore.user?.hasAnyActionOnAnyNamespace(permission.EXECUTION, action.CREATE);
+    });
+
+    const isDisplayedTop = computed(() => {
+        if (props.visibleCharts) return true;
+        else return props.embed === false && props.filter;
+    });
+
+    const states = computed(() => {
+        return [State.FAILED, State.SUCCESS, State.WARNING, State.CANCELLED].map(value => ({
+            code: value,
+            label: t("mark as", {status: value})
+        }));
+    });
+
+    const unQueuestates = computed(() => {
+        return [State.RUNNING, State.CANCELLED, State.FAILED].map(value => ({
+            code: value,
+            label: t("unqueue as", {status: value}),
+        }));
+    });
+
+    const charts = computed(() => {
+        return [
+            {...YAML_UTILS.parse(YAML_CHART), content: YAML_CHART}
+        ];
+    });
+
+    const filteredLabels = (labels: any[]) => {
+        const toIgnore = miscStore.configs?.hiddenLabelsPrefixes || [];
+
+        const queryLabels = route.query?.labels;
+        const allowedLabels = queryLabels ? (Array.isArray(queryLabels) ? queryLabels : [queryLabels]).filter((label): label is string => label !== null).map((label: string) => label.split(":")[0]) : [];
+
+        return labels?.filter(label => {
+            return !toIgnore.some((prefix: string) => label.key.startsWith(prefix)) || allowedLabels.includes(label.key);
+        });
+    };
+
+    const executionParams = (row: any) => {
+        return {
+            namespace: row?.namespace,
+            flowId: row?.flowId,
+            id: row?.id
+        };
+    };
+
+    const onShowChartChange = (value: boolean) => {
+        showChart.value = value;
+        localStorage.setItem(storageKeys.SHOW_CHART, value.toString());
+    };
+
+    const showStatChart = () => {
+        return isDisplayedTop.value && showChart.value;
+    };
+
+    const refresh = () => {
+        recomputeInterval.value = !recomputeInterval.value;
+        const dashboardComponent = selectTableRef.value?.$refs?.dashboardComponent;
+        if (dashboardComponent) {
+            dashboardComponent.refreshCharts();
+        }
+        load(onDataLoaded);
+    };
+
+    const loadQuery = (base: any) => {
+        let queryFilter = queryWithFilter();
+
+        if (props.namespace) {
+            queryFilter["filters[namespace][PREFIX]"] = props.namespace;
+        }
+
+        if (props.flowId) {
+            queryFilter["filters[flowId][EQUALS]"] = props.flowId;
+        }
+
+        const hasStateFilters = Object.keys(queryFilter).some(key => key.startsWith("filters[state]")) || queryFilter.state;
+        if (!hasStateFilters && props.statuses?.length > 0) {
+            queryFilter["filters[state][IN]"] = props.statuses.join(",");
+        }
+
+        return _merge(base, queryFilter);
+    };
+
+    const genericConfirmAction = (message: string, queryAction: string, byIdAction: string, success: string, showCancelButton = true) => {
+        toast.confirm(
+            t(message, {"executionCount": queryBulkAction.value ? executionsStore.total : selection.value.length}),
+            () => genericConfirmCallback(queryAction, byIdAction, success),
+            "warning",
+            showCancelButton
+        );
+    };
+
+    const genericConfirmCallback = (queryAction: string, byIdAction: string, success: string, params?: any) => {
+        const actionMap: Record<string, () => any> = {
+            "queryResumeExecution": () => executionsStore.queryResumeExecution,
+            "bulkResumeExecution": () => executionsStore.bulkResumeExecution,
+            "queryPauseExecution": () => executionsStore.queryPauseExecution,
+            "bulkPauseExecution": () => executionsStore.bulkPauseExecution,
+            "queryUnqueueExecution": () => executionsStore.queryUnqueueExecution,
+            "bulkUnqueueExecution": () => executionsStore.bulkUnqueueExecution,
+            "queryForceRunExecution": () => executionsStore.queryForceRunExecution,
+            "bulkForceRunExecution": () => executionsStore.bulkForceRunExecution,
+            "queryRestartExecution": () => executionsStore.queryRestartExecution,
+            "bulkRestartExecution": () => executionsStore.bulkRestartExecution,
+            "queryReplayExecution": () => executionsStore.queryReplayExecution,
+            "bulkReplayExecution": () => executionsStore.bulkReplayExecution,
+            "queryChangeExecutionStatus": () => executionsStore.queryChangeExecutionStatus,
+            "bulkChangeExecutionStatus": () => executionsStore.bulkChangeExecutionStatus,
+            "queryDeleteExecution": () => executionsStore.queryDeleteExecution,
+            "bulkDeleteExecution": () => executionsStore.bulkDeleteExecution,
+            "queryKill": () => executionsStore.queryKill,
+            "bulkKill": () => executionsStore.bulkKill,
+        };
+
+        if (queryBulkAction.value) {
+            const query = loadQuery({
+                sort: route.query.sort as string || "state.startDate:desc",
+                state: route.query.state ? [route.query.state] : props.statuses,
+            });
+            let options = {...query, ...actionOptions.value};
+            if (params) {
+                options = {...options, ...params};
+            }
+
+            const action = actionMap[queryAction]();
+            return action(options)
+                .then((r: any) => {
+                    toast.success(t(success, {executionCount: r.data.count}));
+                    toggleAllUnselected();
+                    loadData();
+                });
+        } else {
+            const selectionData = {executionsId: selection.value};
+            let options = {...selectionData, ...actionOptions.value};
+            if (params) {
+                options = {...options, ...params};
+            }
+
+            const action = actionMap[byIdAction]();
+            return action(options)
+                .then((r: any) => {
+                    toast.success(t(success, {executionCount: r.data.count}));
+                    toggleAllUnselected();
+                    loadData();
+                }).catch((e: any) => {
+                    toast.error(e?.invalids.map((exec: any) => {
+                        return {message: t(exec.message, {executionId: exec.invalidValue})};
+                    }), t(e.message));
+                });
+        }
+    };
+
+    const resumeExecutions = () => {
+        genericConfirmAction(
+            "bulk resume",
+            "queryResumeExecution",
+            "bulkResumeExecution",
+            "executions resumed",
+            false
+        );
+    };
+
+    const pauseExecutions = () => {
+        genericConfirmAction(
+            "bulk pause",
+            "queryPauseExecution",
+            "bulkPauseExecution",
+            "executions paused"
+        );
+    };
+
+    const unqueueExecutions = () => {
+        unqueueDialogVisible.value = false;
+        actionOptions.value.newStatus = selectedStatus.value;
+
+        genericConfirmCallback(
+            "queryUnqueueExecution",
+            "bulkUnqueueExecution",
+            "executions unqueue"
+        );
+    };
+
+    const forceRunExecutions = () => {
+        genericConfirmAction(
+            "bulk force run",
+            "queryForceRunExecution",
+            "bulkForceRunExecution",
+            "executions force run"
+        );
+    };
+
+    const restartExecutions = () => {
+        genericConfirmAction(
+            "bulk restart",
+            "queryRestartExecution",
+            "bulkRestartExecution",
+            "executions restarted"
+        );
+    };
+
+    const replayExecutions = (latestRevision: boolean) => {
+        isOpenReplayModal.value = false;
+
+        genericConfirmCallback(
+            "queryReplayExecution",
+            "bulkReplayExecution",
+            "executions replayed",
+            {latestRevision: latestRevision}
+        );
+    };
+
+    const changeReplayToast = () => {
+        return t("bulk replay", {"executionCount": queryBulkAction.value ? executionsStore.total : selection.value.length});
+    };
+
+    const changeStatus = async () => {
+        changeStatusDialogVisible.value = false;
+        actionOptions.value.newStatus = selectedStatus.value;
+
+        await genericConfirmCallback(
+            "queryChangeExecutionStatus",
+            "bulkChangeExecutionStatus",
+            "executions state changed"
+        );
+        window.setTimeout(() => loadData(), 100);
+    };
+
+    const changeStatusToast = () => {
+        return t("bulk change state", {"executionCount": queryBulkAction.value ? executionsStore.total : selection.value.length});
+    };
+
+    const deleteExecutions = () => {
+        const includeNonTerminated = ref(false);
+        const deleteLogs = ref(true);
+        const deleteMetrics = ref(true);
+        const deleteStorage = ref(true);
+
+        const message = () => h("div", null, [
+            h(
+                "p",
+                {innerHTML: t("bulk delete", {"executionCount": queryBulkAction.value ? executionsStore.total : selection.value.length})}
+            ),
+            h(ElFormItem, {
+                class: "mt-3",
+                label: t("execution-include-non-terminated")
+            }, [
+                h(ElSwitch, {
+                    modelValue: includeNonTerminated.value,
+                    "onUpdate:modelValue": (val: any) => {
+                        includeNonTerminated.value = Boolean(val);
+                    },
+                }),
+            ]),
+            includeNonTerminated.value ? h(ElAlert, {
+                title: t("execution-warn-title"),
+                description: t("execution-warn-deleting-still-running"),
+                type: "warning",
+                showIcon: true,
+                closable: false,
+                class: "custom-warning"
+            }) : null,
+            h(ElCheckbox, {
+                modelValue: deleteLogs.value,
+                label: t("execution_deletion.logs"),
+                "onUpdate:modelValue": (val: any) => (deleteLogs.value = Boolean(val)),
+            }),
+            h(ElCheckbox, {
+                modelValue: deleteMetrics.value,
+                label: t("execution_deletion.metrics"),
+                "onUpdate:modelValue": (val: any) => (deleteMetrics.value = Boolean(val)),
+            }),
+            h(ElCheckbox, {
+                modelValue: deleteStorage.value,
+                label: t("execution_deletion.storage"),
+                "onUpdate:modelValue": (val: any) => (deleteStorage.value = Boolean(val)),
+            }),
+        ]);
+        ElMessageBox.confirm(message, t("confirmation")).then(() => {
+            actionOptions.value.includeNonTerminated = includeNonTerminated.value;
+            actionOptions.value.deleteLogs = deleteLogs.value;
+            actionOptions.value.deleteMetrics = deleteMetrics.value;
+            actionOptions.value.deleteStorage = deleteStorage.value;
+
+            genericConfirmCallback(
+                "queryDeleteExecution",
+                "bulkDeleteExecution",
+                "executions deleted"
+            );
+        });
+    };
+
+    const killExecutions = () => {
+        genericConfirmAction(
+            "bulk kill",
+            "queryKill",
+            "bulkKill",
+            "executions killed"
+        );
+    };
+
+    const setLabels = () => {
+        const filtered = filterValidLabels(executionLabels.value);
+
+        if (filtered.error) {
+            toast.error(t("wrong labels"), t("error"));
+            return;
+        }
+
+        ElMessageBox.confirm(
+            t("bulk set labels", {"executionCount": queryBulkAction.value ? executionsStore.total : selection.value.length}),
+            t("confirmation"),
+            {dangerouslyUseHTMLString: true}
+        ).then(() => {
+            if (queryBulkAction.value) {
+                return executionsStore
+                    .querySetLabels({
+                        params: loadQuery({
+                            sort: route.query.sort as string || "state.startDate:desc",
+                            state: route.query.state ? [route.query.state] : props.statuses
+                        }),
+                        data: filtered.labels
+                    })
+                    .then((r: any) => {
+                        toast.success(t("Set labels done", {executionCount: r.data.count}));
+                        toggleAllUnselected();
+                        loadData();
+                    });
+            } else {
+                return executionsStore
+                    .bulkSetLabels({
+                        executionsId: selection.value,
+                        executionLabels: filtered.labels
+                    })
+                    .then((r: any) => {
+                        toast.success(t("Set labels done", {executionCount: r.data.count}));
+                        toggleAllUnselected();
+                        loadData();
+                    }).catch((e: any) => toast.error(e.invalids.map((exec: any) => {
+                        return {message: t(exec.message, {executionId: exec.invalidValue})};
+                    }), t(e.message)));
+            }
+        },
+        );
+        isOpenLabelsModal.value = false;
+    };
+
+    const editFlow = () => {
+        router.push({
+            name: "flows/update",
+            params: {
+                namespace: flowStore.flow?.namespace,
+                id: flowStore.flow?.id,
+                tab: "edit",
+                tenant: route.params?.tenant
+            }
+        });
+    };
+
+    const emitStateCount = () => {
+        const runningCount = executionsStore.executions?.filter(execution =>
+            execution?.state?.current === State.RUNNING
+        )?.length ?? 0;
+        const totalCount = executionsStore.total;
+        emit("state-count", {runningCount, totalCount});
+    };
+
+    watch(isOpenLabelsModal, (opening) => {
+        if (opening) {
+            executionLabels.value = [];
+        }
+    });
+
+    async function exportExecutionsAsStream() {
+        await executionsStore.exportExecutionsAsCSV(
+            route.query
+        )
+    }
+</script>
 
 <style scoped lang="scss">
 .shadow {
-    box-shadow: 0px 2px 4px 0px var(--ks-card-shadow);
+    box-shadow: 0px 2px 4px 0px var(--ks-card-shadow) !important;
 }
 
 .padding-bottom {
     padding-bottom: 4rem;
 }
+
 .custom-warning {
-    border: 1px solid #ffb703;
+    border: 1px solid var(--ks-chart-border-warning);
     border-radius: 7px;
-    box-shadow: 1px 1px 3px 1px #ffb703;
+    box-shadow: 1px 1px 3px 1px var(--ks-chart-border-warning);
 
     :deep(.el-alert__title) {
         font-size: 16px;
-        color: #ffb703;
+        color: var(--ks-content-warning);
         font-weight: bold;
     }
 
@@ -997,19 +1093,19 @@
     }
 
     :deep(.el-alert__icon) {
-        color: #ffb703;
+        color: var(--ks-content-warning);
     }
 }
-</style>
 
-<style lang="scss">
-.el-message-box {
-    padding: 2rem;
-    max-width: initial;
-    width: 500px;
+.code-text {
+    color: var(--ks-content-primary);
+}
 
-    .custom-warning {
-        margin: 1rem 0;
-    }
+:deep(.executions-table) .el-table__row {
+    cursor: pointer;
+}
+
+:deep(a.execution-id) code {
+    color: var(--ks-content-link);
 }
 </style>

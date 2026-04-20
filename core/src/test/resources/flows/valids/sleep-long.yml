@@ -4,4 +4,10 @@ namespace: io.kestra.tests
 tasks:
   - id: sleep-long
     type: io.kestra.plugin.core.flow.Sleep
-    duration: PT300S
+    duration: PT30S
+
+afterExecution:
+  - id: output
+    type: io.kestra.plugin.core.output.OutputValues
+    values:
+      state: "{{execution.state}}"

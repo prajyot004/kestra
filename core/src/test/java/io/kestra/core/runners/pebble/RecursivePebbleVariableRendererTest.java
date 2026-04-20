@@ -1,23 +1,24 @@
 package io.kestra.core.runners.pebble;
 
+import java.util.Collections;
+
+import org.junit.jupiter.api.Test;
+
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
 import io.kestra.core.runners.VariableRenderer;
+
 import io.micronaut.context.annotation.Property;
-import io.kestra.core.junit.annotations.KestraTest;
+import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
-import org.junit.jupiter.api.Test;
 
-import java.util.Collections;
-
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.is;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-@KestraTest
+@MicronautTest
 @Property(name = "kestra.variables.recursive-rendering", value = "true")
 class RecursivePebbleVariableRendererTest {
     @Inject
@@ -41,16 +42,16 @@ class RecursivePebbleVariableRendererTest {
         );
 
         String render = variableRenderer.render("{{ third }}", vars);
-        assertThat(render, is("1"));
+        assertThat(render).isEqualTo("1");
 
         render = variableRenderer.render("{{ map }}", vars);
-        assertThat(render, is("{\"third\":\"1\"}"));
+        assertThat(render).isEqualTo("{\"third\":\"1\"}");
 
         render = variableRenderer.render("{{ list }}", vars);
-        assertThat(render, is("[\"1\"]"));
+        assertThat(render).isEqualTo("[\"1\"]");
 
         render = variableRenderer.render("{{ set }}", vars);
-        assertThat(render, is("[\"1\"]"));
+        assertThat(render).isEqualTo("[\"1\"]");
     }
 
     @Test
@@ -63,11 +64,11 @@ class RecursivePebbleVariableRendererTest {
             IllegalVariableEvaluationException.class,
             () -> variableRenderer.render("{{ render(first) }}", vars)
         );
-        assertThat(illegalVariableEvaluationException.getMessage(), containsString("Function or Macro [render] does not exist"));
+        assertThat(illegalVariableEvaluationException.getMessage()).contains("Function or Macro [render] does not exist");
     }
 
     @Test
     void renderFunctionKeepRaw() throws IllegalVariableEvaluationException {
-        assertThat(variableRenderer.render("{% raw %}{{first}}{% endraw %}", Collections.emptyMap()), is("{{first}}"));
+        assertThat(variableRenderer.render("{% raw %}{{first}}{% endraw %}", Collections.emptyMap())).isEqualTo("{{first}}");
     }
 }

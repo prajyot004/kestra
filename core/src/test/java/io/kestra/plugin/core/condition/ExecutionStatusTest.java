@@ -1,20 +1,22 @@
 package io.kestra.plugin.core.condition;
 
-import com.google.common.collect.ImmutableMap;
-import io.kestra.core.junit.annotations.KestraTest;
+import java.util.Collections;
+
 import org.junit.jupiter.api.Test;
+
+import com.google.common.collect.ImmutableMap;
+
+import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.flows.Flow;
 import io.kestra.core.models.flows.State;
+import io.kestra.core.models.property.Property;
 import io.kestra.core.services.ConditionService;
 import io.kestra.core.utils.TestsUtils;
 
-import java.util.Collections;
-
 import jakarta.inject.Inject;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
+import static org.assertj.core.api.Assertions.assertThat;
 
 @KestraTest
 class ExecutionStatusTest {
@@ -27,12 +29,12 @@ class ExecutionStatusTest {
         Execution execution = TestsUtils.mockExecution(flow, ImmutableMap.of());
 
         ExecutionStatus build = ExecutionStatus.builder()
-            .in(Collections.singletonList(State.Type.SUCCESS))
+            .in(Property.ofValue(Collections.singletonList(State.Type.SUCCESS)))
             .build();
 
         boolean test = conditionService.isValid(build, flow, execution);
 
-        assertThat(test, is(false));
+        assertThat(test).isFalse();
     }
 
     @Test
@@ -41,12 +43,12 @@ class ExecutionStatusTest {
         Execution execution = TestsUtils.mockExecution(flow, ImmutableMap.of());
 
         ExecutionStatus build = ExecutionStatus.builder()
-            .notIn(Collections.singletonList(State.Type.SUCCESS))
+            .notIn(Property.ofValue(Collections.singletonList(State.Type.SUCCESS)))
             .build();
 
         boolean test = conditionService.isValid(build, flow, execution);
 
-        assertThat(test, is(true));
+        assertThat(test).isTrue();
     }
 
     @Test
@@ -55,12 +57,12 @@ class ExecutionStatusTest {
         Execution execution = TestsUtils.mockExecution(flow, ImmutableMap.of());
 
         ExecutionStatus build = ExecutionStatus.builder()
-            .in(Collections.singletonList(State.Type.CREATED))
-            .notIn(Collections.singletonList(State.Type.SUCCESS))
+            .in(Property.ofValue(Collections.singletonList(State.Type.CREATED)))
+            .notIn(Property.ofValue(Collections.singletonList(State.Type.SUCCESS)))
             .build();
 
         boolean test = conditionService.isValid(build, flow, execution);
 
-        assertThat(test, is(false));
+        assertThat(test).isFalse();
     }
 }
